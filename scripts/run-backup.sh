@@ -70,20 +70,14 @@ main() {
 # 执行单个任务块。参数为若干键值行（key=val，来自 parse_jobs 单任务输出），JOBNAME 从中提取。
 run_one_jobblock() {
     local line key val start_j end_j rc
-    local jname b_src b_dest b_ssh_host b_ssh_user b_ssh_pass b_ssh_port b_ssh_key b_extra
-    jname="_unnamed"; b_src=""; b_dest=""; b_ssh_host=""; b_ssh_user="root"
-    b_ssh_pass=""; b_ssh_port="22"; b_ssh_key=""; b_extra=""
+    local jname b_src b_dest b_extra
+    jname="_unnamed"; b_src=""; b_dest=""; b_extra=""
     for line in "$@"; do
         key="${line%%=*}"; val="${line#*=}"
         case "$key" in
             JOBNAME) jname="$val" ;;
             SRC)    b_src="$val" ;;
             DEST)   b_dest="$val" ;;
-            SSH_HOST) b_ssh_host="$val" ;;
-            SSH_USER) b_ssh_user="$val" ;;
-            SSH_PASS) b_ssh_pass="$val" ;;
-            SSH_PORT) b_ssh_port="$val" ;;
-            SSH_KEY)  b_ssh_key="$val" ;;
             EXTRA_EXCLUDE) b_extra="$val" ;;
         esac
     done
@@ -92,10 +86,7 @@ run_one_jobblock() {
 
     # 用环境变量调用 job.sh
     env JOBNAME="$jname" \
-        SRC="$b_src" DEST="$b_dest" \
-        SSH_HOST="$b_ssh_host" SSH_USER="$b_ssh_user" \
-        SSH_PASS="$b_ssh_pass" SSH_PORT="$b_ssh_port" \
-        SSH_KEY="$b_ssh_key" EXTRA_EXCLUDE="$b_extra" \
+        SRC="$b_src" DEST="$b_dest" EXTRA_EXCLUDE="$b_extra" \
         FORCE_DRY_RUN="$FORCE_DRY_RUN" \
         STATS_FILE="${STATS_DIR}/job-${jname}-$$" \
         "${SCRIPT_DIR}/job.sh"

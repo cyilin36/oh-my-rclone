@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # job.sh - 执行单条同步备份任务
 # 由 run-backup.sh 调用。参数为环境变量：
-#   JOBNAME SRC DEST SSH_HOST SSH_USER SSH_PASS SSH_PORT SSH_KEY EXTRA_EXCLUDE
+#   JOBNAME SRC DEST EXTRA_EXCLUDE
 # 也可直接以 `JOBNAME=.. SRC=.. DEST=.. ./job.sh` 形式手工调用用于测试。
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,11 +11,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 : "${JOBNAME:=unnamed}"
 : "${SRC:=}"
 : "${DEST:=}"
-: "${SSH_HOST:=}"
-: "${SSH_USER:=root}"
-: "${SSH_PASS:=}"
-: "${SSH_PORT:=22}"
-: "${SSH_KEY:=}"
 : "${EXTRA_EXCLUDE:=}"
 
 # 任务返回后统一处理：卸载 trap 中的临时变量。

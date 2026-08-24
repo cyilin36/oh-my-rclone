@@ -57,21 +57,23 @@ docker compose logs -f oh-my-rclone
 每行一条任务，字段以 `|` 分隔：
 
 ```
-name|src|dest|ssh_host|ssh_user|ssh_pass|ssh_port|ssh_key|extra_exclude
+name|src|dest|extra_exclude
 ```
 
 字段|说明
 ---|---
 `name`|任务名（唯一）
-`src`|源目录（容器内路径，通常来自 `/data` 挂载）
+`src`|源目录（容器内路径，对应 `docker-compose` 挂载的 `/data` 下子目录）
 `dest`|rclone 远程:路径（对应 `rclone.conf` 的 sftp 远程）
-`ssh_*`|目标 sftp 连接信息（用于自动生成远程；常规情况由 `rclone.conf` 决定）
-`extra_exclude`|任务级额外排除（`;` 分隔，与 `excludes.conf` 同语法）
+`extra_exclude`|任务级额外排除（可选，`;` 分隔，与 `excludes.conf` 同语法）
+
+> ⚠️ **sftp 连接凭据（host/user/pass/密钥）只需在 `conf/rclone.conf` 配置一次**，
+> 多个任务通过 `dest` 里的远程名（如 `backup-sftp:...`）共用，**不需要在每行重复**。
 
 示例：
 ```
-postgres|/data/postgres|backup-sftp:backup/postgres|192.168.1.50|backupuser|S3cretPass|22||
-docs|/data/docs|backup-sftp:backup/docs|192.168.1.50|backupuser||22|/keys/id_ed25519|ext=.tmp;dir=logs/
+postgres|/data/postgres|backup-sftp:backup/postgres|
+docs|/data/docs|backup-sftp:backup/docs|ext=.tmp;dir=logs/
 ```
 
 ---

@@ -55,14 +55,19 @@ fmt_duration() {
 }
 
 # ----------------------------------------------------------- 配置读取
-# jobs.conf 行格式：name|src|remote:path|[ssh_host|ssh_user|ssh_pass|ssh_port|ssh_key][|extra_excludes]
+# jobs.conf 行格式：name|src|dest|[extra_excludes]
+#   name   任务名（唯一）
+#   src    源目录（容器内路径，如 /data/postgres）
+#   dest   rclone 远程:路径（如 backup-sftp:backup/postgres），凭据在 rclone.conf 中定义
+#   extra  任务级额外排除（可选，分号分隔，与 excludes.conf 同语法）
 # 示例：
-#   postgres|/data/postgres|remote:backup/postgres|192.168.1.5|backupuser|secret||22|
+#   postgres|/data/postgres|backup-sftp:backup/postgres|
+#   docs|/data/docs|backup-sftp:backup/docs|ext=.tmp;dir=logs/
 parse_jobs() {
     local file="$1"
     [ -r "$file" ] || { log_error "jobs 配置文件不可读: $file"; return 1; }
     # 逐行读取，跳过空行与 # 注释
-    while IFS='|' read -r jobname src dest ssh_host ssh_user ssh_pass ssh_port ssh_key extra; do
+    while IFS='|' read -r jobname src dest extra; do
         [ -z "$jobname" ] && continue
         case "$jobname" in \#*) continue ;; esac
         [ -z "$src" ] && { log_warn "跳过空 src 的任务: $jobname"; continue; }
@@ -71,11 +76,6 @@ parse_jobs() {
         printf '%s\n' "JOBNAME=$jobname" \
                      "SRC=$src" \
                      "DEST=$dest" \
-                     "SSH_HOST=$ssh_host" \
-                     "SSH_USER=$ssh_user" \
-                     "SSH_PASS=$ssh_pass" \
-                     "SSH_PORT=$ssh_port" \
-                     "SSH_KEY=$ssh_key" \
                      "EXTRA_EXCLUDE=$extra"
     done < "$file" | awk 'NF>0'
 }
