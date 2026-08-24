@@ -181,12 +181,14 @@ make_reflink_stage() {
     [ -e "$src" ] || { log_error "[$job] 源路径不存在: $src"; return 1; }
 
     # 若严格模式且当前 FS 不支持 reflink，报错（由调用方决定是否中止任务）。
+    # 注意必须用 cp -a（保留属性 + 递归复制目录），否则目录复制会 "omitting directory" 退出非零，
+    # 被误判为"不支持 reflink"。
     if [ "${REFLINK_STRICT}" = "true" ]; then
-        if ! cp --reflink=always "$src/.". "$stage/." </dev/null 2>/dev/null; then
+        if ! cp -a --reflink=always "$src"/. "$stage"/. </dev/null 2>&1; then
             log_error "[$job] REFLINK_STRICT 且当前文件系统不支持 reflink（源与暂存须同 FS）"; return 2
         fi
     else
-        cp --reflink=auto -a "$src"/. "$stage"/. 2>/dev/null \
+        cp -a --reflink=auto "$src"/. "$stage"/. 2>/dev/null \
             || cp -a "$src"/. "$stage"/. \
             || { log_error "[$job] 复制到快照区失败"; return 1; }
     fi
