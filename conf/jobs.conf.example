@@ -1,0 +1,25 @@
+# jobs.conf - oh-my-rclone 多任务定义（示例）
+#
+# 格式（每行一条，字段用 | 分隔）：
+#   name|src|dest|ssh_host|ssh_user|ssh_pass|ssh_port|ssh_key|extra_exclude
+#
+#   name        任务名（唯一）
+#   src         源目录（容器内路径；通常来自 /data 挂载，见 compose）
+#   dest        rclone 远程:路径（对应 rclone.conf 中定义的 sftp 远程）
+#   ssh_host    目标 sftp 主机（可选，用于自动生成远程的实际生效主机；多数情况由 rclone.conf 决定）
+#   ssh_user    sftp 用户名
+#   ssh_pass    sftp 密码（sshkey 时可为空）
+#   ssh_port    sftp 端口，默认 22
+#   ssh_key     私钥文件路径（容器内；与密码二选一）
+#   extra_exclude 任务级额外排除（可选；分号 ; 分隔，与 excludes.conf 同语法；可为空）
+#
+# 以 # 开头或空行被忽略。宿主机目录建议使用绝对路径并挂载到容器内。
+
+# ---- 例 1：用密码登录的 sftp 远程，reflink 快照 + docker 适配 ----
+# postgres|/data/postgres|backup-sftp:backup/postgres|192.168.1.50|backupuser|S3cretPass|22||
+#
+# ---- 例 2：用密钥登录，额外排除临时文件 ----
+# docs|/data/docs|backup-sftp:backup/docs|192.168.1.50|backupuser||22|/keys/id_ed25519|ext=.tmp;dir=logs/
+#
+# ---- 例 3：dry-run 预检模板（把 FORCE_DRY_RUN=1 传给 run-backup.sh）----
+# www|/data/www|backup-sftp:backup/www|192.168.1.50|backupuser|Pass123|22||

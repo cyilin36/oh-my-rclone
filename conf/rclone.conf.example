@@ -1,0 +1,24 @@
+# rclone.conf - oh-my-rclone 远程定义（示例，sftp）
+# 复制为 conf/rclone.conf 并按需修改。
+# 若不在 conf/rclone.conf 定义，entrypoint 会根据 .env 中的 SSH_* 变量自动生成一个 [backup-sftp]。
+#
+# 密码可用 rclone obscure 加密：rclone obscure '你的密码'
+# 也支持 ssh 密钥：type=sftp + host/user + key_file=容器内私钥路径。
+
+[backup-sftp]
+type = sftp
+host = 192.168.1.50
+user = backupuser
+port = 22
+# pass 使用 rclone obscure 后的密文；若使用密钥则去掉 pass 并填 key_file
+# pass = XXXXobscuredXXXX
+# key_file = /keys/id_ed25519
+
+# 可选：另建一个走密钥的远程
+# [backup-sftp-key]
+# type = sftp
+# host = 192.168.1.51
+# user = root
+# port = 22
+# key_file = /keys/id_ed25519
+# key_use_agent = false

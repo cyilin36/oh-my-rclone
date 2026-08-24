@@ -1,0 +1,10 @@
+# 构建镜像时本地使用的临时 DOCKER_CONFIG（含 buildx 缓存）
+.docker-test/
+
+# 运行时生成的数据/日志（如部署在项目目录内时）
+*.log
+backup.log
+
+# 编辑器/系统文件
+.DS_Store
+*.swp

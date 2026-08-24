@@ -1,0 +1,35 @@
+# excludes.conf - 同步目录排除项（示例）
+#
+# 每行一条规则，支持：
+#   file=相对路径/文件       排除单个文件（相对源目录）
+#   dir=相对路径/目录        排除整个文件夹
+#   ext=.log 或 ext=*.log    排除所有该类型文件（任意层级）
+#   glob=logs/**/*.log       通配匹配相对路径（可实现“某目录下某类型全排除”）
+#   path=node_modules        任意层级匹配该段名称所在目录
+#
+# 被排除的文件将被彻底无视：不上传、不计入失败清单、不触发任何操作。
+# 以 # 开头或空行被忽略。
+# 建议把容器 /tmp（reflink 快照暂存区）排除，避免递归/重复上传。
+
+# ---- 排除单个文件 ----
+# file=database.sqlite.tmp
+
+# ---- 排除整目录 ----
+# dir=tmp_files/
+# dir=node_modules/
+
+# ---- 排除某类型（任意层级）----
+# ext=.log
+# ext=.tmp
+# ext=*.part
+
+# ---- “某目录下所有某种类型全排除”：用 glob 组合 ----
+# glob=cache/**/*.log
+# glob=backups/**/temp-*
+
+# ---- 匹配任意层级的某段目录名 ----
+# path=.git
+# path=__pycache__
+
+# ---- 重要：把 reflink 快照暂存区排除（entrypoint 也会自动做，双保险）----
+# dir=data/oh-my-rclone/tmp/
