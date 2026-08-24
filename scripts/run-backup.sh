@@ -76,7 +76,7 @@ run_one_jobblock() {
     local start_j end_j rc
     local jname b_src b_dest b_remote b_exclude
     local b_reflink b_dockeren b_dockermode b_dockercontainers
-    local b_whenable b_whsuccess b_whurl b_whtoken
+    local b_whenable b_whsuccess b_whurl b_whtoken b_whumo
 
     # 从块文本解析出各字段（值已由 python 单引号转义）
     eval "$(printf '%s\n' "$block")"
@@ -86,6 +86,7 @@ run_one_jobblock() {
     b_dockermode="${DOCKER_MODE:-whitelist}"; b_dockercontainers="${DOCKER_CONTAINERS:-}"
     b_whenable="${WEBHOOK_ENABLE:-false}"; b_whsuccess="${WEBHOOK_SUCCESS_ONLY:-false}"
     b_whurl="${ASTROBOT_PUSH_URL:-}"; b_whtoken="${ASTROBOT_PUSH_TOKEN:-}"
+    b_whumo="${ASTROBOT_PUSH_UMO:-}"
 
     start_j="$(date +%s)"
     log_info ">>> 执行任务 [$jname] src=$b_src dest=$b_dest remote=$b_remote"
@@ -96,7 +97,7 @@ run_one_jobblock() {
         REFLINK_ENABLE="$b_reflink" \
         DOCKER_ADAPT_ENABLE="$b_dockeren" DOCKER_MODE="$b_dockermode" DOCKER_CONTAINERS="$b_dockercontainers" \
         WEBHOOK_ENABLE="$b_whenable" WEBHOOK_SUCCESS_ONLY="$b_whsuccess" \
-        ASTROBOT_PUSH_URL="$b_whurl" ASTROBOT_PUSH_TOKEN="$b_whtoken" \
+        ASTROBOT_PUSH_URL="$b_whurl" ASTROBOT_PUSH_TOKEN="$b_whtoken" ASTROBOT_PUSH_UMO="$b_whumo" \
         FORCE_DRY_RUN="$FORCE_DRY_RUN" \
         STATS_FILE="${STATS_DIR}/job-${jname}-$$" \
         "${SCRIPT_DIR}/job.sh"

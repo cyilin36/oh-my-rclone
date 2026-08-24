@@ -31,6 +31,7 @@ ENV_MAP = {
     "WEBHOOK_SUCCESS_ONLY": ("webhook_success_only", True, "false"),
     "ASTROBOT_PUSH_URL": ("astrobot_push_url", False, ""),
     "ASTROBOT_PUSH_TOKEN": ("astrobot_push_token", False, ""),
+    "ASTROBOT_PUSH_UMO": ("astrobot_push_umo", False, ""),
     "FAIL_LIST_MAX":     ("fail_list_max", False, "50"),
     "CRON_SCHEDULE":     ("schedule", False, "0 3 * * *"),
     "EXCLUDE_GLOBAL":    ("exclude", False, ""),   # 分号分隔的全局排除
@@ -41,6 +42,7 @@ TOP_KEYS = {
     "remote_host", "remote_user", "remote_pass", "remote_port", "remote_key_file",
     "reflink", "reflink_strict", "docker_adapt", "docker_mode", "docker_containers",
     "webhook", "webhook_success_only", "astrobot_push_url", "astrobot_push_token",
+    "astrobot_push_umo",
     "fail_list_max", "schedule", "exclude",
 }
 
@@ -52,7 +54,7 @@ JOB_KEYS = {
     "name", "src", "dest", "remote", "remote_host", "remote_user", "remote_pass",
     "remote_port", "remote_key_file", "exclude", "enabled", "reflink", "reflink_strict",
     "docker_adapt", "docker_mode", "docker_containers", "webhook", "webhook_success_only",
-    "astrobot_push_url", "astrobot_push_token",
+    "astrobot_push_url", "astrobot_push_token", "astrobot_push_umo",
 }
 
 
@@ -221,6 +223,7 @@ def emit_jobs(g, data, path):
         print(f"WEBHOOK_SUCCESS_ONLY='{m.get('webhook_success_only','false')}'")
         print(f"ASTROBOT_PUSH_URL='{m.get('astrobot_push_url','')}'")
         print(f"ASTROBOT_PUSH_TOKEN='{m.get('astrobot_push_token','')}'")
+        print(f"ASTROBOT_PUSH_UMO='{m.get('astrobot_push_umo','')}'")
         print()
 
 

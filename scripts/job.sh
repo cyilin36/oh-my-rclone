@@ -220,7 +220,7 @@ run_one_job() {
                 msg+="失败文件: ${failed_files:-（无详细清单，见日志）}\n"
             fi
             printf -v msg '%b' "$msg"
-            send_notify "$msg" "${ASTROBOT_PUSH_URL}" "${ASTROBOT_PUSH_TOKEN}"
+            send_notify "$msg" "${ASTROBOT_PUSH_URL}" "${ASTROBOT_PUSH_TOKEN}" "${ASTROBOT_PUSH_UMO}"
         fi
     fi
 
