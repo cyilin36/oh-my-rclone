@@ -133,7 +133,9 @@ webhook_success_only = false
 | `exclude` | 任务级排除（数组/分号），叠加全局 | 继承全局 |
 | `webhook` / `webhook_success_only` | 该任务 webhook 开关 | 继承 .env |
 | `enabled` | 是否启用该任务 | `true` |
-| `reflink` / `docker_adapt` 等 | 覆盖该任务开关 | 继承 .env |
+| `reflink` / `reflink_strict` | 覆盖该任务开关 | 继承 .env |
+
+> ⚠️ **docker 适配是全局配置**，只在 `.env` 里设置（`DOCKER_ADAPT_ENABLE` / `DOCKER_MODE` / `DOCKER_CONTAINERS`），**不支持任务级覆盖**——因为它是针对整批容器的操作，任务级配置会导致冲突。任务块里写 docker_* 会被忽略。
 
 ### `docker-compose.yml`（挂载）
 

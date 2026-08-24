@@ -50,10 +50,12 @@ TOP_KEYS = {
 BOOL_KEYS = {"reflink", "reflink_strict", "docker_adapt", "webhook", "webhook_success_only"}
 
 # 每个任务允许的键
+# 注意：docker 适配相关（docker_adapt/docker_mode/docker_containers）为【全局配置】，
+# 只在 .env 中设置，不做任务级覆盖，避免多个任务配置冲突。
 JOB_KEYS = {
     "name", "src", "dest", "remote", "remote_host", "remote_user", "remote_pass",
     "remote_port", "remote_key_file", "exclude", "enabled", "reflink", "reflink_strict",
-    "docker_adapt", "docker_mode", "docker_containers", "webhook", "webhook_success_only",
+    "webhook", "webhook_success_only",
     "astrobot_push_url", "astrobot_push_token", "astrobot_push_umo",
 }
 
@@ -215,9 +217,10 @@ def emit_jobs(g, data, path):
         # 任务级开关（合并全局 + 任务覆盖）
         m = merge_job(g, job)
         print(f"REFLINK_ENABLE='{m.get('reflink','true')}'")
-        print(f"DOCKER_ADAPT_ENABLE='{m.get('docker_adapt','false')}'")
-        print(f"DOCKER_MODE='{m.get('docker_mode','whitelist')}'")
-        print(f"DOCKER_CONTAINERS='{m.get('docker_containers','')}'")
+        # docker 适配为全局配置（仅 .env），任务不覆盖，避免冲突
+        print(f"DOCKER_ADAPT_ENABLE='{g.get('docker_adapt','false')}'")
+        print(f"DOCKER_MODE='{g.get('docker_mode','whitelist')}'")
+        print(f"DOCKER_CONTAINERS='{g.get('docker_containers','')}'")
         # webhook（任务级）
         print(f"WEBHOOK_ENABLE='{m.get('webhook','false')}'")
         print(f"WEBHOOK_SUCCESS_ONLY='{m.get('webhook_success_only','false')}'")

@@ -219,6 +219,8 @@ cleanup_stage() {
     local job="$1"
     # 删除整个 job 快照目录（含 stage 与空目录残留），释放磁盘。
     rm -rf "${OMR_TMP_ROOT:-/tmp/oh-my-rclone}/$job"
+    # 若根目录已空（无其他任务残留），一并删除，避免 /tmp 留空壳。
+    rmdir "${OMR_TMP_ROOT:-/tmp/oh-my-rclone}" 2>/dev/null || true
 }
 
 # ----------------------------------------------------------- Docker 适配
