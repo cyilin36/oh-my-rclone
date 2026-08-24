@@ -1,0 +1,56 @@
+# config.toml - oh-my-rclone 任务配置（frpc 风格，一个任务一个 [[job]] 块）
+#
+# 配置分层：
+#   .env 提供【全局默认】（默认远端、开关、定时、webhook 全局默认）
+#   config.toml 提供【任务细则 + 覆盖】：任务没写的字段自动继承 .env 默认
+#   优先级：任务块 > config.toml 顶部(可选) > .env 默认
+#
+# 复制为 conf/config.toml 后按需修改（含密码，勿提交，已在 .gitignore）。
+
+# ===== 可选：config.toml 顶部可覆盖 .env 的全局默认（一般不需要）=====
+# [global]
+# reflink = true
+# webhook = false
+
+# ===== 任务定义：一个任务一个块 =====
+# 每个任务必须有 name / src / dest；其余可选，没写继承 .env。
+
+# ---- 例 1：用 .env 默认远端，备份 /data/postgres 到远端 backup/postgres ----
+[[job]]
+name = "postgres"
+src = "/data/postgres"
+dest = "backup/postgres"
+
+# ---- 例 2：任务级排除（决定哪些文件不同步，叠加 .env 的全局默认排除）----
+[[job]]
+name = "docs"
+src = "/data/docs"
+dest = "backup/docs"
+exclude = ["ext=.tmp", "dir=node_modules/", "glob=cache/**/*.log"]
+
+# ---- 例 3：单独指定远端（覆盖 .env 默认远端），并开启该任务的 webhook ----
+[[job]]
+name = "mysql-other"
+src = "/data/mysql"
+dest = "backup/mysql"
+remote_host = "192.168.1.60"
+remote_user = "backup2"
+remote_pass = "another_password"
+remote_port = 22
+# remote_key_file = "/keys/id_ed25519"
+webhook = true                 # 该任务完成后单独发一份 webhook（覆盖 .env 默认）
+# webhook_success_only = false # 仅成功才通知（覆盖 .env 默认）
+
+# ---- 例 4：禁用某任务（不执行）----
+# [[job]]
+# name = "temp"
+# src = "/data/temp"
+# dest = "backup/temp"
+# enabled = false
+
+# ---- 例 5：用 rclone.conf 中已存在的手工远端（非自动生成）----
+# [[job]]
+# name = "manual"
+# src = "/data/manual"
+# dest = "backup/manual"
+# remote = "my-manual-remote"   # 指定 rclone.conf 中已有的远端名

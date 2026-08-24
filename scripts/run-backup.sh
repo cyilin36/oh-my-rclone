@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
-# run-backup.sh - 遍历 jobs.conf 串行执行所有备份任务，汇总统计并上报 webhook。
+# run-backup.sh - 遍历 conf/config.toml 的任务，串行执行所有备份，汇总统计并上报批次 webhook。
 #
 # 用法：
-#   CONFIG_JOBS=/etc/oh-my-rclone/conf/jobs.conf ./run-backup.sh
 #   FORCE_DRY_RUN=1 ./run-backup.sh      # 全部任务 dry-run（预检）
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -11,7 +10,6 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/notify.sh" >/dev/null 2>&1 || true
 
-CONFIG_JOBS="${CONFIG_JOBS:-${CONF_DIR}/jobs.conf}"
 : "${FORCE_DRY_RUN:=0}"
 STATS_DIR="$(mktemp -d)"
 trap 'rm -rf "$STATS_DIR"' EXIT
@@ -27,26 +25,29 @@ main() {
     t_start="$(date +%s)"
     log_info "========== 备份批次开始 $(date '+%F %T') =========="
 
-    local total_lines
-    total_lines="$(parse_jobs "$CONFIG_JOBS" | wc -l)"
-    if [ "${total_lines}" -eq 0 ]; then
-        log_warn "未解析到任何任务（jobs.conf 为空或格式错误？）：$CONFIG_JOBS"
+    # 解析 config.toml 的任务块（空行分隔）
+    local block="" line
+    local has_job=0
+    while IFS= read -r line; do
+        if [ -z "$line" ]; then
+            # 空行 = 任务块结束
+            if [ -n "$block" ]; then
+                run_one_jobblock "$block"
+                has_job=1
+                block=""
+            fi
+            continue
+        fi
+        block="${block}${block:+$'\n'}${line}"
+    done < <(parse_toml_jobs)
+
+    if [ -n "$block" ]; then
+        run_one_jobblock "$block"
+        has_job=1
     fi
 
-    local block=() line key
-    while IFS= read -r line; do
-        [ -z "$line" ] && continue
-        key="${line%%=*}"
-        # 用 JOBNAME 作为任务边界：遇到新任务名时先处理上一个完整块（不依赖固定行数）
-        if [ "$key" = "JOBNAME" ] && [ ${#block[@]} -gt 0 ]; then
-            run_one_jobblock "${block[@]}"
-            block=()
-        fi
-        block+=("$line")
-    done < <(parse_jobs "$CONFIG_JOBS")
-
-    if [ ${#block[@]} -gt 0 ]; then
-        run_one_jobblock "${block[@]}"
+    if [ "$has_job" -eq 0 ]; then
+        log_warn "未解析到任何任务（config.toml 为空或格式错误？）：$CONFIG_TOML"
     fi
 
     t_end="$(date +%s)"
@@ -54,8 +55,10 @@ main() {
     duration="$(fmt_duration $((t_end - t_start)))"
     log_info "========== 备份批次结束 $(date '+%F %T') 总耗时 $duration =========="
 
-    # ---- webhook 汇总 ----
-    if [ "${WEBHOOK_ENABLE}" = "true" ]; then
+    # ---- 批次汇总 webhook（用全局 webhook 配置判断）----
+    local global_wh
+    global_wh="$(load_global_config 2>/dev/null | grep -E '^webhook=' | head -1 | cut -d= -f2 || echo false)"
+    if [ "${global_wh}" = "true" ]; then
         local status overall_success_name start_s end_s
         if [ "$overall_ok" -eq 0 ]; then overall_success_name="成功"; else overall_success_name="失败"; fi
         start_s="$(date -d "@$t_start" '+%F %T' 2>/dev/null || date '+%F %T')"
@@ -67,26 +70,33 @@ main() {
     return $overall_ok
 }
 
-# 执行单个任务块。参数为若干键值行（key=val，来自 parse_jobs 单任务输出），JOBNAME 从中提取。
+# 执行单个任务块。参数为单任务块文本（含引号转义的 key=value 多行）。
 run_one_jobblock() {
-    local line key val start_j end_j rc
-    local jname b_src b_dest b_extra
-    jname="_unnamed"; b_src=""; b_dest=""; b_extra=""
-    for line in "$@"; do
-        key="${line%%=*}"; val="${line#*=}"
-        case "$key" in
-            JOBNAME) jname="$val" ;;
-            SRC)    b_src="$val" ;;
-            DEST)   b_dest="$val" ;;
-            EXTRA_EXCLUDE) b_extra="$val" ;;
-        esac
-    done
+    local block="$1"
+    local start_j end_j rc
+    local jname b_src b_dest b_remote b_exclude
+    local b_reflink b_dockeren b_dockermode b_dockercontainers
+    local b_whenable b_whsuccess b_whurl b_whtoken
+
+    # 从块文本解析出各字段（值已由 python 单引号转义）
+    eval "$(printf '%s\n' "$block")"
+    jname="${JOBNAME:-_unnamed}"; b_src="${SRC:-}"; b_dest="${DEST:-}"
+    b_remote="${REMOTE:-default}"; b_exclude="${EXCLUDE:-}"
+    b_reflink="${REFLINK_ENABLE:-true}"; b_dockeren="${DOCKER_ADAPT_ENABLE:-false}"
+    b_dockermode="${DOCKER_MODE:-whitelist}"; b_dockercontainers="${DOCKER_CONTAINERS:-}"
+    b_whenable="${WEBHOOK_ENABLE:-false}"; b_whsuccess="${WEBHOOK_SUCCESS_ONLY:-false}"
+    b_whurl="${ASTROBOT_PUSH_URL:-}"; b_whtoken="${ASTROBOT_PUSH_TOKEN:-}"
+
     start_j="$(date +%s)"
-    log_info ">>> 执行任务 [$jname] src=$b_src dest=$b_dest"
+    log_info ">>> 执行任务 [$jname] src=$b_src dest=$b_dest remote=$b_remote"
 
     # 用环境变量调用 job.sh
     env JOBNAME="$jname" \
-        SRC="$b_src" DEST="$b_dest" EXTRA_EXCLUDE="$b_extra" \
+        SRC="$b_src" DEST="$b_dest" REMOTE="$b_remote" EXCLUDE="$b_exclude" \
+        REFLINK_ENABLE="$b_reflink" \
+        DOCKER_ADAPT_ENABLE="$b_dockeren" DOCKER_MODE="$b_dockermode" DOCKER_CONTAINERS="$b_dockercontainers" \
+        WEBHOOK_ENABLE="$b_whenable" WEBHOOK_SUCCESS_ONLY="$b_whsuccess" \
+        ASTROBOT_PUSH_URL="$b_whurl" ASTROBOT_PUSH_TOKEN="$b_whtoken" \
         FORCE_DRY_RUN="$FORCE_DRY_RUN" \
         STATS_FILE="${STATS_DIR}/job-${jname}-$$" \
         "${SCRIPT_DIR}/job.sh"

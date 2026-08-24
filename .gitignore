@@ -1,8 +1,10 @@
 # 构建镜像时本地使用的临时 DOCKER_CONFIG（含 buildx 缓存）
 .docker-test/
 
-# 真实环境变量（含敏感凭据，勿提交）；模板见 .env.example
+# 真实配置（含密码/token，勿提交）；模板见 .env.example / conf/config.toml.example
 .env
+conf/config.toml
+conf/rclone.conf
 
 # 运行时生成的数据/日志（如部署在项目目录内时）
 *.log

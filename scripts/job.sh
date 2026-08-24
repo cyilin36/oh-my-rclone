@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 # job.sh - 执行单条同步备份任务
 # 由 run-backup.sh 调用。参数为环境变量：
-#   JOBNAME SRC DEST EXTRA_EXCLUDE
-# 也可直接以 `JOBNAME=.. SRC=.. DEST=.. ./job.sh` 形式手工调用用于测试。
+#   JOBNAME SRC DEST REMOTE EXCLUDE REFLINK_ENABLE DOCKER_* WEBHOOK_* ASTROBOT_*
+# 也可直接以 `JOBNAME=.. SRC=.. DEST=.. REMOTE=default ./job.sh` 形式手工调用用于测试。
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib.sh"
+# shellcheck disable=SC1091
+. "${SCRIPT_DIR}/notify.sh" >/dev/null 2>&1 || true
 
 : "${JOBNAME:=unnamed}"
 : "${SRC:=}"
-: "${DEST:=}"
-: "${EXTRA_EXCLUDE:=}"
+: "${DEST:=}"                    # 远端下的相对路径（如 backup/postgres）
+: "${REMOTE:=default}"           # 该任务使用的远端名（rclone.conf 中定义）
+: "${EXCLUDE:=}"                 # 分号分隔的排除规则（全局+任务已合并）
+: "${RCLONE_CONF:=/var/lib/oh-my-rclone/rclone.conf}"
 
 # 任务返回后统一处理：卸载 trap 中的临时变量。
 RESULT=0
@@ -44,19 +48,16 @@ trap '_cleanup_job' EXIT
 
 run_one_job() {
     local start_total end_total
+    local job_start_s job_end_s
+    job_start_s="$(date +%s)"
     if [ -z "$SRC" ] || [ -z "$DEST" ]; then
         log_error "[$JOBNAME] 缺少 SRC 或 DEST"; return 1
     fi
 
     log_info "[$JOBNAME] ===== 开始备份 ===== src=$SRC dest=$DEST"
 
-    # ---- 排除规则（任务级 extra + 全局 excludes.conf + 自动排除 reflink 区）----
-    local rules="$(load_excludes "${EXCLUDE_CONF}")"
-    [ -z "$rules" ] && rules=""
-    if [ -n "$EXTRA_EXCLUDE" ]; then
-        # 额外规则用 ; 分隔追加
-        rules="${rules}${rules:+$'\n'}$(echo "$EXTRA_EXCLUDE" | tr ';' '\n')"
-    fi
+    # ---- 排除规则（来自 parse_config.py 合并：全局+任务级）+ 自动排除 reflink 区 ----
+    local rules="$(printf '%s\n' "$EXCLUDE" | tr ';' '\n' | grep -vE '^[[:space:]]*$')"
     # 自动排除 /tmp 快照根，杜绝复制/上传环（双向保护）
     rules="${rules}${rules:+$'\n'}dir=${OMR_TMP_ROOT#/}"
     rules="${rules}${rules:+$'\n'}path=${OMR_TMP_ROOT#/}"
@@ -111,7 +112,7 @@ run_one_job() {
     local logdir="/var/lib/oh-my-rclone"
     mkdir -p "$logdir" 2>/dev/null || logdir="${STATS_DIR:-/tmp}"
     tmp_out="$logdir/${JOBNAME}.$(date +%s).log"
-    local args=( sync "$rclone_src" "$DEST" -v --stats-one-line --stats 5s )
+    local args=( sync "$rclone_src" "${REMOTE}:${DEST}" --config "${RCLONE_CONF}" -v --stats-one-line --stats 5s )
     # reflink 关闭时，无需 --dry-run（正式执行）。
     # 若传入 FORCE_DRY_RUN=1 则 dry-run（测试/预检用）。
     if [ "${FORCE_DRY_RUN:=0}" = "1" ]; then
@@ -191,6 +192,36 @@ run_one_job() {
     if [ "${REFLINK_ENABLE}" != "true" ] && [ -n "$PAUSE_LIST" ]; then
         docker_unpause_all "$PAUSE_LIST"
         PAUSE_LIST=""
+    fi
+
+    # ---- 单任务 webhook（任务级配置）----
+    job_end_s="$(date +%s)"
+    if [ "${WEBHOOK_ENABLE}" = "true" ]; then
+        local job_status job_start_str job_end_str job_dur
+        if [ "$RESULT" -eq 0 ]; then job_status="成功"; else job_status="失败"; fi
+        # success_only=true 且任务成功才发；成功与否由 RESULT 决定
+        if [ "${WEBHOOK_SUCCESS_ONLY}" = "true" ] && [ "$RESULT" -ne 0 ]; then
+            log_info "[$JOBNAME] webhook 配置为仅成功通知，本次失败不发送"
+        else
+            job_start_str="$(date -d "@$job_start_s" '+%F %T' 2>/dev/null || date '+%F %T')"
+            job_end_str="$(date -d "@$job_end_s" '+%F %T' 2>/dev/null || date '+%F %T')"
+            job_dur="$(fmt_duration $((job_end_s - job_start_s)))"
+            local msg
+            msg="【oh-my-rclone 任务报告】${JOBNAME} - ${job_status}\n"
+            msg+="源: ${SRC}\n"
+            msg+="目标: ${REMOTE}:${DEST}\n"
+            msg+="上传数据: ${uploaded_bytes}\n"
+            msg+="失败文件大小: ${fsize_bytes} B\n"
+            msg+="开始: ${job_start_str}  结束: ${job_end_str}\n"
+            msg+="耗时: ${job_dur}\n"
+            if [ "$RESULT" -eq 0 ]; then
+                msg+="失败文件: 无\n"
+            else
+                msg+="失败文件: ${failed_files:-（无详细清单，见日志）}\n"
+            fi
+            printf -v msg '%b' "$msg"
+            send_notify "$msg" "${ASTROBOT_PUSH_URL}" "${ASTROBOT_PUSH_TOKEN}"
+        fi
     fi
 
     log_info "[$JOBNAME] ===== 任务结束 exit=$RESULT ====="

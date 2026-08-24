@@ -1,9 +1,9 @@
 # docker-compose.yml.example - oh-my-rclone 编排示例
 #
 # ⚠️ 使用前：
-#   - 复制 .env.example 为 .env，并填写【绝对路径】的宿主机目录。
-#   - 复制 conf/*.example 为 conf/* 实际文件，配置 jobs/rclone/excludes。
-#   - 本镜像通过 docker.sock 与宿主机 Docker 交互（docker 适配功能）；若不需要可移除该 volume。
+#   - 复制 .env.example 为 .env（默认远端/开关/定时/webhook 默认值）
+#   - 复制 conf/config.toml.example 为 conf/config.toml（每个任务一个块）
+#   - 宿主机【挂载】全部在这里配置（绝对路径），.env 不承载路径
 #
 # 用法：
 #   docker compose up -d --build        # 构建并启动
@@ -18,38 +18,29 @@ services:
     container_name: oh-my-rclone
     restart: unless-stopped
     hostname: oh-my-rclone
-    env_file: .env
+    env_file: .env                  # 注入全局默认（默认远端/开关/定时/webhook）
     environment:
       - TZ=${TZ}
       - CONTAINER_NAME=oh-my-rclone
     volumes:
-      # ---- 源数据目录（只读）----
-      # 每个源目录映射到容器 /data 下唯一子目录，jobs.conf 的 src 填写对应的容器内路径。
-      # 单源示例：
-      - ${DATA_SRC_DIR}:/data:ro
-      # 多源示例（多条同步备份时，把每个宿主机绝对路径源各挂一行）：
+      # ---- 源数据目录（宿主机【绝对路径】挂载）----
+      # 每个源挂到容器 /data 下唯一子目录；config.toml 任务的 src 填对应的容器内路径。
+      # 例：postgres 源 → /data/postgres；docs 源 → /data/docs
       # - /path/to/postgres_data:/data/postgres:ro
-      # - /path/to/nextcloud_data:/data/nextcloud:ro
-      # 对应 jobs.conf：
-      #   postgres|/data/postgres|backup-sftp:backup/postgres|...
-      #   nextcloud|/data/nextcloud|backup-sftp:backup/nextcloud|...
+      # - /path/to/docs:/data/docs:ro
 
-      # reflink 暂存区：映射到容器 /tmp。建议绝对路径，并建议列入 excludes.conf。
-      - ${TMP_DIR}:/tmp
+      # ---- reflink 暂存区：映射到容器 /tmp ----
+      # - /var/lib/oh-my-rclone/tmp:/tmp
 
-      # 宿主机 Docker socket（docker 适配功能必需）。
+      # ---- 宿主机 Docker socket（docker 适配功能必需）----
       # 若 DOCKER_ADAPT_ENABLE=false 可移除下面这行。
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
 
-      # 配置文件（jobs/rclone/excludes）挂载为只读
+      # ---- 配置文件（config.toml + 可选 rclone.conf / 密钥）----
       - ./conf:/etc/oh-my-rclone/conf:ro
 
-    # 如需 sftp 密钥登录，挂载私钥（按需取消注释）：
-    # - /path/to/id_ed25519:/keys/id_ed25519:ro
-
-    # 固定配额情景下 TMP 空间可单独用 tmpfs 或额外卷；示例使用绑定挂载到宿主机目录。
-    # tmpfs:
-    #   - /tmp                   # 可选：用内存盘放快照（注意内存容量，reflink 需同文件系统才会别名）
+      # 如需 sftp 密钥登录，挂载私钥（按需取消注释）：
+      # - /path/to/id_ed25519:/keys/id_ed25519:ro
 
     logging:
       driver: json-file

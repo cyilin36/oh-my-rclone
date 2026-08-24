@@ -15,6 +15,7 @@ RUN set -eux; \
         curl \
         bash \
         dcron \
+        python3 \
         ca-certificates \
         tzdata; \
     mkdir -p /etc/oh-my-rclone/conf /var/lib/oh-my-rclone /tmp/oh-my-rclone /scripts

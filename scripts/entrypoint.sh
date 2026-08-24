@@ -1,63 +1,94 @@
 #!/usr/bin/env bash
 # entrypoint.sh - oh-my-rclone 容器入口
 # 职责：
-#   1. 从环境变量生成 rclone.conf（主要针对 sftp 远程，密码/密钥）
-#   2. 注册 cron 定时任务
-#   3. 常驻运行（输出日志到 stdout/stderr）
+#   1. 读取 conf/config.toml（合并 .env 环境变量默认）→ 自动生成 rclone.conf（各 sftp 远端）
+#   2. 注册 cron 定时任务（全局 schedule）
+#   3. 导出全局配置到环境，供 run-backup.sh / job.sh 使用
+#   4. 常驻运行（输出日志到 stdout/stderr）
 set -o pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck disable=SC1091
 . "${SCRIPT_DIR}/lib.sh"
 
 CONF_DIR="${CONF_DIR:-/etc/oh-my-rclone/conf}"
-RCLONE_CONF="${RCLONE_CONF:-${CONF_DIR}/rclone.conf}"
-: "${CRON_SCHEDULE:=0 3 * * *}"
-: "${RCLONE_ALIAS:=backup-sftp}"
-: "${SSH_HOST:=}"
-: "${SSH_USER:=root}"
-: "${SSH_PASS:=}"
-: "${SSH_PORT:=22}"
-: "${SSH_KEY:=}"
-: "${SSH_KEY_FILE:=}"
+# rclone.conf 生成到可写目录（conf 卷可能是只读挂载）
+RCLONE_CONF="${RCLONE_CONF:-/var/lib/oh-my-rclone/rclone.conf}"
 
-# 生成/补充 rclone.conf 中的 sftp 远程。
-# 优先使用 conf/rclone.conf.example 中已有的 sftp 定义；若未定义则按 env 自动生成一个。
-ensure_rclone_conf() {
-    mkdir -p "$(dirname "$RCLONE_CONF")"
-    if [ -f "$RCLONE_CONF" ] && grep -q "\[${RCLONE_ALIAS}\]" "$RCLONE_CONF" 2>/dev/null; then
-        log_info "rclone.conf 已含远程 [$RCLONE_ALIAS]，沿用现有配置"
+# 加载全局有效配置（合并 .env 默认 + config.toml 顶部覆盖）到当前 shell 环境。
+load_globals_into_env() {
+    local line k v
+    while IFS= read -r line; do
+        [ -z "$line" ] && continue
+        k="${line%%=*}"; v="${line#*=}"
+        # 仅导出字母数字下划线开头的键（安全）
+        case "$k" in
+            [A-Za-z_]*=*) export "$k=$v" ;;
+        esac
+    done < <(python3 "$PARSE_PY" --global "$CONFIG_TOML" 2>/dev/null)
+}
+
+# 由 --remotes 输出生成 rclone.conf（每个远端一段）。
+# 若 RCLONE_CONF 已存在（用户预置，如 local 后端测试或手工配置），则沿用。
+generate_rclone_conf() {
+    if [ -s "$RCLONE_CONF" ]; then
+        log_info "rclone.conf 已存在（沿用）：$RCLONE_CONF"
         return 0
     fi
-    # 未找到：若没有 SSH_HOST 则只能提示（需用户提供 conf）
-    if [ -z "$SSH_HOST" ]; then
-        log_error "未找到远程 [$RCLONE_ALIAS] 且未设置 SSH_HOST，无法自动生成 sftp 远程。"
-        log_error "请提供 conf/rclone.conf（含 sftp 远程）或设置对应 SSH_* 环境变量。"
+    mkdir -p "$(dirname "$RCLONE_CONF")"
+    : > "$RCLONE_CONF"
+    local block="" line
+    local rname rhost ruser rpass rport rkey
+    rname=""; rhost=""; ruser="root"; rpass=""; rport="22"; rkey=""
+
+    flush_remote() {
+        if [ -z "$rname" ] || [ -z "$rhost" ]; then return; fi
+        log_info "生成 sftp 远端 [$rname] → ${ruser}@${rhost}:${rport}"
+        {
+            echo "[${rname}]"
+            echo "type = sftp"
+            echo "host = ${rhost}"
+            echo "user = ${ruser}"
+            echo "port = ${rport}"
+            if [ -n "$rpass" ]; then
+                echo "pass = $(rclone obscure "$rpass" 2>/dev/null || echo "$rpass")"
+            fi
+            if [ -n "$rkey" ] && [ -f "$rkey" ]; then
+                echo "key_file = ${rkey}"
+            fi
+        } >> "$RCLONE_CONF"
+        rname=""; rhost=""; ruser="root"; rpass=""; rport="22"; rkey=""
+    }
+
+    while IFS= read -r line; do
+        [ -z "$line" ] && { flush_remote; continue; }
+        # 值带单引号，eval 解析
+        eval "k=${line%%=*}; v=${line#*=}"
+        case "$k" in
+            REMOTE) rname="$v" ;;
+            REMOTE_HOST) rhost="$v" ;;
+            REMOTE_USER) ruser="$v" ;;
+            REMOTE_PASS) rpass="$v" ;;
+            REMOTE_PORT) rport="$v" ;;
+            REMOTE_KEY_FILE) rkey="$v" ;;
+        esac
+    done < <(python3 "$PARSE_PY" --remotes "$CONFIG_TOML" 2>/dev/null)
+    flush_remote
+
+    if [ -s "$RCLONE_CONF" ]; then
+        log_info "rclone.conf 已生成（远端数: $(grep -c '^\[.*\]$' "$RCLONE_CONF" 2>/dev/null || echo 0)）"
+        return 0
+    else
+        log_error "未生成任何 sftp 远端：请至少配置 REMOTE_HOST（.env 或 config.toml），否则无法备份"
         return 1
     fi
-    log_info "自动生成 sftp 远程 [$RCLONE_ALIAS] → ${SSH_USER}@${SSH_HOST}:${SSH_PORT}"
-    {
-        echo "[${RCLONE_ALIAS}]"
-        echo "type = sftp"
-        echo "host = ${SSH_HOST}"
-        echo "user = ${SSH_USER}"
-        echo "port = ${SSH_PORT}"
-        if [ -n "${SSH_PASS}" ]; then
-            # 用 rclone obscure 加密密码写入
-            echo "pass = $(rclone obscure "${SSH_PASS}" 2>/dev/null || echo "${SSH_PASS}")"
-        fi
-        if [ -n "${SSH_KEY_FILE}" ] && [ -f "${SSH_KEY_FILE}" ]; then
-            echo "key_file = ${SSH_KEY_FILE}"
-        elif [ -n "${SSH_KEY}" ] && [ -f "${SSH_KEY}" ]; then
-            echo "key_file = ${SSH_KEY}"
-        fi
-    } >> "$RCLONE_CONF"
 }
 
 setup_cron() {
+    local schedule="${CRON_SCHEDULE:-0 3 * * *}"
     mkdir -p /var/spool/cron/crontabs
     local crontab_file="/var/spool/cron/crontabs/root"
     # 使用 flock 防止容器内并发重入导致重复备份
-    echo "${CRON_SCHEDULE} flock -n /var/lib/oh-my-rclone/backup.lock ${SCRIPT_DIR}/run-backup.sh >> /var/lib/oh-my-rclone/backup.log 2>&1" \
+    echo "${schedule} flock -n /var/lib/oh-my-rclone/backup.lock ${SCRIPT_DIR}/run-backup.sh >> /var/lib/oh-my-rclone/backup.log 2>&1" \
         > "$crontab_file"
     # 启动 dcron
     if command -v crond >/dev/null 2>&1; then
@@ -65,7 +96,7 @@ setup_cron() {
     else
         log_error "未找到 crond，定时将不可用（可手动调用 run-backup.sh）"
     fi
-    log_info "cron 已注册: ${CRON_SCHEDULE}"
+    log_info "cron 已注册: ${schedule}"
     cat "$crontab_file"
 }
 
@@ -85,7 +116,8 @@ keepalive() {
 }
 
 main() {
-    ensure_rclone_conf || log_warn "rclone.conf 未就绪，可稍后通过 conf 卷提供"
+    load_globals_into_env
+    generate_rclone_conf || log_warn "rclone.conf 未生成，请检查 config.toml / .env 的远端配置"
     setup_cron
     keepalive
 }

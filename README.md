@@ -7,24 +7,36 @@
 
 ---
 
+## 配置架构（三份文件各司其职）
+
+| 文件 | 职责 | 内容 |
+|---|---|---|
+| **`.env`** | **全局默认层** | 默认远端服务器、功能开关默认值、默认定时、webhook 全局默认 |
+| **`conf/config.toml`** | **任务层 + 覆盖层**（frpc 风格） | 每个任务一个 `[[job]]` 块：src/dest/排除/webhook/远端覆盖/开关覆盖 |
+| **`docker-compose.yml`** | 宿主机挂载 | 所有宿主机目录挂载（绝对路径）、env_file 引入 `.env` |
+
+- **优先级**：任务块 > config.toml 顶部(可选) > `.env` 默认。任务没写的字段自动继承 `.env`。
+- **挂载只写 compose**；**src/dest、排除、任务级 webhook 只写 config.toml**；`.env` 只做默认。
+
+---
+
 ## 目录结构
 
 ```
 oh-my-rclone/
 ├── Dockerfile
 ├── docker-compose.yml.example   # 编排示例（复制为 docker-compose.yml）
-├── .env.example                 # 环境变量示例（复制为 .env）
+├── .env.example                 # 全局默认示例（复制为 .env）
 ├── README.md
 ├── scripts/
 │   ├── entrypoint.sh            # 容器入口：生成 rclone.conf、注册 cron、常驻
-│   ├── run-backup.sh            # 遍历 jobs.conf 串行执行所有备份、汇总、webhook
-│   ├── job.sh                   # 单条任务流程（reflink/docker/排除/统计）
+│   ├── parse_config.py          # 解析 config.toml + .env 合并出全局/每任务配置
+│   ├── run-backup.sh            # 遍历 config.toml 的任务串行执行、汇总、webhook
+│   ├── job.sh                   # 单条任务流程（reflink/docker/排除/统计/单任务 webhook）
 │   ├── lib.sh                   # 公共库（解析、日志、docker pause、reflink、排除）
 │   └── notify.sh                # webhook 发送
 └── conf/
-    ├── jobs.conf.example        # 多任务定义
-    ├── rclone.conf.example      # sftp 远程定义
-    └── excludes.conf.example    # 同步排除项
+    └── config.toml.example      # 任务配置示例（复制为 config.toml）
 ```
 
 ---
@@ -34,10 +46,10 @@ oh-my-rclone/
 ```bash
 # 1) 准备配置
 cp .env.example .env
-cp conf/jobs.conf.example   conf/jobs.conf
-cp conf/rclone.conf.example conf/rclone.conf
-cp conf/excludes.conf.example conf/excludes.conf
-#   → 编辑 .env / conf/jobs.conf / conf/rclone.conf（填绝对路径、sftp 凭据、任务）
+cp conf/config.toml.example conf/config.toml
+#   → 编辑 .env（默认远端/开关/定时/webhook 默认）
+#   → 编辑 conf/config.toml（每个任务一个块）
+#   → 编辑 docker-compose.yml（宿主机源目录挂载，绝对路径）
 
 # 2) 启动
 docker compose up -d --build
@@ -52,29 +64,92 @@ docker compose logs -f oh-my-rclone
 
 ---
 
-## 多任务配置：`conf/jobs.conf`
+## 配置详解
 
-每行一条任务，字段以 `|` 分隔：
+### `.env`（全局默认）
 
+```ini
+# 默认远端服务器（任务没单独写就用它）
+REMOTE_HOST=192.168.1.50
+REMOTE_USER=backupuser
+REMOTE_PASS=your_password      # 明文，启动时自动 rclone obscure 加密写入 rclone.conf
+REMOTE_PORT=22
+# REMOTE_KEY_FILE=/keys/id_ed25519
+
+# 各项功能开关（默认值，任务可在 config.toml 覆盖）
+REFLINK_ENABLE=true
+DOCKER_ADAPT_ENABLE=false
+DOCKER_MODE=whitelist
+DOCKER_CONTAINERS=postgres,mysql
+FAIL_LIST_MAX=50
+
+# webhook 全局默认（任务可在 config.toml 覆盖）
+WEBHOOK_ENABLE=false
+WEBHOOK_SUCCESS_ONLY=false
+ASTROBOT_PUSH_URL=https://your-astrbot.example.com/api/push
+ASTROBOT_PUSH_TOKEN=your_token
+
+# 默认定时
+CRON_SCHEDULE="0 3 * * *"
+
+# 全局排除（可选，所有任务生效，任务级 exclude 再叠加）
+# EXCLUDE_GLOBAL="ext=.log; dir=node_modules/"
 ```
-name|src|dest|extra_exclude
+
+### `conf/config.toml`（任务层，一个任务一个块）
+
+```toml
+[[job]]
+name = "postgres"               # 任务名（必填）
+src = "/data/postgres"          # 同步哪个文件夹（容器内路径，必填）
+dest = "backup/postgres"        # 远端哪个路径（必填，用 .env 默认远端）
+
+[[job]]
+name = "docs"
+src = "/data/docs"
+dest = "backup/docs"
+exclude = ["ext=.tmp", "dir=node_modules/"]   # 决定哪些文件不同步
+webhook = true                  # 该任务完成后单独发一份 webhook
+
+[[job]]
+name = "mysql-other"            # 单独指定远端（覆盖 .env 默认）
+src = "/data/mysql"
+dest = "backup/mysql"
+remote_host = "192.168.1.60"
+remote_user = "backup2"
+remote_pass = "another_password"
+webhook_success_only = false
+# enabled = false               # 禁用该任务
+# reflink = false               # 覆盖该任务开关
 ```
 
-字段|说明
----|---
-`name`|任务名（唯一）
-`src`|源目录（容器内路径，对应 `docker-compose` 挂载的 `/data` 下子目录）
-`dest`|rclone 远程:路径（对应 `rclone.conf` 的 sftp 远程）
-`extra_exclude`|任务级额外排除（可选，`;` 分隔，与 `excludes.conf` 同语法）
+任务块可用键：
 
-> ⚠️ **sftp 连接凭据（host/user/pass/密钥）只需在 `conf/rclone.conf` 配置一次**，
-> 多个任务通过 `dest` 里的远程名（如 `backup-sftp:...`）共用，**不需要在每行重复**。
+| 键 | 说明 | 缺省 |
+|---|---|---|
+| `name` / `src` / `dest` | 必填 | - |
+| `remote_host/user/pass/port/key_file` | 单独指定远端（覆盖 .env 默认） | 继承 .env |
+| `remote` | 指定 rclone.conf 中已有的手工远端名 | - |
+| `exclude` | 任务级排除（数组/分号），叠加全局 | 继承全局 |
+| `webhook` / `webhook_success_only` | 该任务 webhook 开关 | 继承 .env |
+| `enabled` | 是否启用该任务 | `true` |
+| `reflink` / `docker_adapt` 等 | 覆盖该任务开关 | 继承 .env |
 
-示例：
+### `docker-compose.yml`（挂载）
+
+```yaml
+services:
+  oh-my-rclone:
+    env_file: .env
+    volumes:
+      - /path/to/postgres_data:/data/postgres:ro    # 宿主机绝对路径 → /data/postgres
+      - /path/to/docs:/data/docs:ro
+      - /var/lib/oh-my-rclone/tmp:/tmp               # reflink 暂存区
+      - /var/run/docker.sock:/var/run/docker.sock:ro # docker 适配
+      - ./conf:/etc/oh-my-rclone/conf:ro
 ```
-postgres|/data/postgres|backup-sftp:backup/postgres|
-docs|/data/docs|backup-sftp:backup/docs|ext=.tmp;dir=logs/
-```
+
+> 挂载只在这里配；config.toml 任务的 `src` 填对应的容器内路径（如 `/data/postgres`）。
 
 ---
 
@@ -95,16 +170,16 @@ docs|/data/docs|backup-sftp:backup/docs|ext=.tmp;dir=logs/
 - `DOCKER_MODE=whitelist`：只对 `DOCKER_CONTAINERS` 记录表内**正在运行**的容器 pause/unpause。
 - `DOCKER_MODE=blacklist`：把 `DOCKER_CONTAINERS` 记录表内的容器排除，处理其余运行中容器。
   > ⚠️ **blacklist 有真实风险**：它会对**记录表之外所有运行中的容器**执行 pause/unpause。若你有很多业务容器且未全部列入记录表，它们都会被短暂冻结。
-  > **强烈建议优先使用 `whitelist`**，把需要暂停的容器明确列出；只有在明确理解语义时才用 blacklist。
+  > **强烈建议优先使用 `whitelist`**。
 - **必定排除本容器**（`oh-my-rclone` / 运行时容器名），**绝不 pause 自身** → 杜绝冻结自身导致死循环。
 - 与 reflink 联动：
   - reflink **关**：pause(命中容器) → **全程** rclone 上传 → unpause。
-  - reflink **开**：pause(命中容器) → 完成快照（瞬时）→ **立即 unpause** 恢复业务容器 → rclone 后台上传快照。避免长时间上传让业务容器停摆。
-- `trap` 保障 pause 后必有 unpause（含重试 & 超时），即使任务中断也不会残留冻结容器。
+  - reflink **开**：pause(命中容器) → 完成快照（瞬时）→ **立即 unpause** 恢复业务容器 → rclone 后台上传快照。
+- `trap` 保障 pause 后必有 unpause（含重试 & 超时）。
 
-### 3. 同步目录排除项（`EXCLUDE_CONF`）
+### 3. 同步目录排除项
 
-见 `conf/excludes.conf.example`，支持：
+排除规则（`EXCLUDE_GLOBAL` 或任务 `exclude`），支持：
 
 - 文件：`file=relative/path/foo.bin`
 - 文件夹：`dir=logs/`
@@ -114,15 +189,14 @@ docs|/data/docs|backup-sftp:backup/docs|ext=.tmp;dir=logs/
 
 被排除文件会被**彻底无视**：不上传、不计入失败清单、不触发任何动作。
 
-### 4. Webhook 通知（`WEBHOOK_ENABLE=false`，默认关闭）
+### 4. Webhook 通知
 
-兼容 [`astrbot_plugin_push_lite`](https://github.com/Raven95676/astrbot_plugin_push_lite)。统一在整批备份结束（回到静默态）后上报一条报告，内容含：
+兼容 [`astrbot_plugin_push_lite`](https://github.com/Raven95676/astrbot_plugin_push_lite)。支持**两层通知**：
 
-- 本次同步成功/失败（整体）
-- 本次同步上传数据大小
-- 本次哪些文件同步失败（≤ `FAIL_LIST_MAX` 条）
-- 本次同步失败文件大小（合计字节）
-- 本次同步开始时间、结束时间、总耗时
+- **单任务 webhook**：任务块 `webhook = true` → 该任务**完成后单独发一份报告**（任务名/成败/上传量/失败文件/失败文件大小/起止时间/耗时）。没写则继承 `.env` 的 `WEBHOOK_ENABLE` 默认。
+- **批次汇总 webhook**：整批备份结束（回到静默态）发一份汇总，含批次起止时间与总耗时。
+
+报告必含：同步成功/失败、上传数据量、失败文件清单（≤ `FAIL_LIST_MAX` 条）、失败文件大小、开始时间、结束时间、总耗时。
 
 发送方式（`scripts/notify.sh`）：
 
@@ -132,7 +206,7 @@ curl -X POST "${ASTROBOT_PUSH_URL}" \
      --data-urlencode "message=<报告文本>"
 ```
 
-`ASTROBOT_PUSH_URL` / `ASTROBOT_PUSH_TOKEN` 全可配；默认鉴权字段名 `token`（可经 `ASTROBOT_PUSH_KEY` 覆盖），以兼容该插件或其它兼容端点。`WEBHOOK_SUCCESS_ONLY` 可设为仅在成功时通知。
+默认鉴权字段名 `token`（可经 `ASTROBOT_PUSH_KEY` 覆盖）。`WEBHOOK_SUCCESS_ONLY` 可设为仅在成功时通知。
 
 ---
 
@@ -150,12 +224,13 @@ docker compose restart oh-my-rclone                            # 重启
 
 ## 设计说明与边界
 
-- **传输**：sftp，密码优先（`sshpass`），可选密钥（`--key_file`）。
-- **调度**：容器内 `dcron`（零外部依赖）按 `CRON_SCHEDULE` 触发 `run-backup.sh`；`flock` 防止重入。
+- **传输**：sftp，密码优先（`sshpass`），可选密钥。远端凭据由 `.env`/`config.toml` 自动生成 `rclone.conf`，启动时 `rclone obscure` 加密。
+- **调度**：容器内 `dcron` 按全局 `CRON_SCHEDULE` 触发 `run-backup.sh`；`flock` 防止重入。
 - **统计口径**：上传量为 rclone 报告字节；失败文件大小按本地对应源文件 `stat` 合计；rclone 输出解析失败时保留原始日志并标注。
-- **目录建议绝对路径**：`.env` 中宿主机目录一律使用绝对路径，避免 relative 解析歧义。
+- **挂载绝对路径**：宿主机目录一律在 `docker-compose.yml` 使用绝对路径。
 - **多任务串行**：避免 tmp 冲突与重复 pause。
-- 单向覆盖同步。如需版本历史可自行在任务中引入 rclone `--backup-dir`（脚本预留注释位）。
+- 单向覆盖同步。如需版本历史可自行在任务中引入 rclone `--backup-dir`。
+- 敏感项（密码/token）在 `.env` / `conf/config.toml`（已 `.gitignore`，不随仓库提交）。
 
 ---
 
@@ -163,10 +238,11 @@ docker compose restart oh-my-rclone                            # 重启
 
 | 现象 | 排查 |
 |---|---|
-| 容器启动报“未找到远程/未设置 SSH_HOST” | 在 `conf/rclone.conf` 定义 sftp 远程，或补齐 `.env` 的 `SSH_*` |
+| 容器启动报"未生成任何 sftp 远端" | 在 `.env` 填 `REMOTE_HOST`（默认远端），或任务块填 `remote_host` |
 | docker 适配无效果 | 确认 `DOCKER_ADAPT_ENABLE=true` 且挂载了 `docker.sock`、容器名正确 |
 | reflink 变成了普通复制 | 源与 `/tmp` 不在同一可 reflink 文件系统（btrfs/xfs）；这是预期降级 |
-| 没有 webhook | 确认 `WEBHOOK_ENABLE=true`、`ASTROBOT_PUSH_URL` 可达、token 正确 |
+| 没有 webhook | 确认 `WEBHOOK_ENABLE=true`（全局或任务级）、`ASTROBOT_PUSH_URL` 可达、token 正确 |
+| 任务没执行 | 检查 `conf/config.toml` 语法、任务块是否 `enabled = false`、是否有 name/src/dest |
 | 想要测试失败分支 | 用不存在/无权限的 `dest`；`FORCE_DRY_RUN=1` 不会真正上传 |
 
 ---
@@ -177,14 +253,12 @@ docker compose restart oh-my-rclone                            # 重启
 
 | 功能 | 验证结果 |
 |---|---|
-| reflink 快照 + 排除 + 上传后清理 | ✅ 首传 3 文件，`.log` 正确排除，stage/job 目录完全清理 |
-| 上传量统计 | ✅ 首传显示 `26 B`，与 rclone 统计行一致；增量无变化显示 `0 B` |
-| 同步排除项（`ext=.log` / `dir=` / `path=` / `glob=`） | ✅ 单元 + 容器内均验证 |
-| docker 适配（whitelist，真实 pause/unpause） | ✅ 只对测试容器 `omr-fake-app` 执行 pause→快照→unpause；工具自身从未被 pause |
-| docker 适配 reflink 联动 | ✅ reflink 开：pause→快照→立即 unpause→上传；reflink 关：pause→全程上传→unpause |
-| docker 目标选区（whitelist/blacklist/强黑名单自身） | ✅ mock API 验证：记录表过滤正确、自身始终被排除 |
-| webhook 成功报告 | ✅ 含 状态/上传数据/失败文件/失败文件大小/起止时间/总耗时 |
-| webhook 失败报告 | ✅ 失败任务正确上报 |
+| TOML 配置解析（继承/覆盖远端/exclude 叠加/enabled=false 跳过/任务级 webhook） | ✅ 单测通过 |
+| reflink 快照 + 排除 + 上传后清理 | ✅ 首传文件正确，`.log` 排除，stage/job 目录完全清理 |
+| 上传量统计 | ✅ 首传显示正确字节，增量无变化显示 `0 B` |
+| 同步排除项（`ext=` / `dir=` / `path=` / `glob=`） | ✅ 单元 + 容器内均验证 |
+| docker 适配（whitelist，真实 pause/unpause） | ✅ 只对测试容器执行 pause→快照→unpause；工具自身从未被 pause |
+| 单任务 webhook + 批次汇总 webhook | ✅ 每任务各发一份 + 批次汇总一份，内容含成败/上传量/失败文件/大小/起止时间/耗时 |
 | cron 注册 + 容器常驻 | ✅ 容器内 crond 运行、crontab 正确 |
 | docker compose 配置解析 | ✅ `docker compose config` 通过 |
 

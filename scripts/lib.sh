@@ -55,29 +55,31 @@ fmt_duration() {
 }
 
 # ----------------------------------------------------------- 配置读取
-# jobs.conf 行格式：name|src|dest|[extra_excludes]
-#   name   任务名（唯一）
-#   src    源目录（容器内路径，如 /data/postgres）
-#   dest   rclone 远程:路径（如 backup-sftp:backup/postgres），凭据在 rclone.conf 中定义
-#   extra  任务级额外排除（可选，分号分隔，与 excludes.conf 同语法）
-# 示例：
-#   postgres|/data/postgres|backup-sftp:backup/postgres|
-#   docs|/data/docs|backup-sftp:backup/docs|ext=.tmp;dir=logs/
-parse_jobs() {
-    local file="$1"
-    [ -r "$file" ] || { log_error "jobs 配置文件不可读: $file"; return 1; }
-    # 逐行读取，跳过空行与 # 注释
-    while IFS='|' read -r jobname src dest extra; do
-        [ -z "$jobname" ] && continue
-        case "$jobname" in \#*) continue ;; esac
-        [ -z "$src" ] && { log_warn "跳过空 src 的任务: $jobname"; continue; }
-        [ -z "$dest" ] && { log_warn "跳过空 dest 的任务: $jobname"; continue; }
-        # 输出可通过 eval 读取
-        printf '%s\n' "JOBNAME=$jobname" \
-                     "SRC=$src" \
-                     "DEST=$dest" \
-                     "EXTRA_EXCLUDE=$extra"
-    done < "$file" | awk 'NF>0'
+# config.toml 由 parse_config.py 解析（合并 .env 环境变量默认 + 任务块覆盖）。
+# 优先级：任务块 > config.toml 顶部(可选) > .env 默认。
+PARSE_PY="${PARSE_PY:-${SCRIPT_DIR}/parse_config.py}"
+CONFIG_TOML="${CONFIG_TOML:-${CONF_DIR}/config.toml}"
+
+# 加载全局有效配置（key=value 行 -> 环境变量）。供 entrypoint 使用。
+load_global_config() {
+    python3 "$PARSE_PY" --global "$CONFIG_TOML" 2>/dev/null
+}
+
+# 输出每任务合并配置：空行分隔，键为 JOBNAME=... 等（单引号转义）。
+# 调用方需按空行切块并 eval/解析。此处仅输出原始行。
+parse_toml_jobs() {
+    python3 "$PARSE_PY" --jobs "$CONFIG_TOML" 2>&1
+}
+
+# 由单个任务块文本（含引号转义）生成 shell 变量到当前环境。
+# 输入形如：
+#   JOBNAME='postgres'
+#   SRC='/data/postgres'
+#   ...
+# 用 eval 安全执行（值已由 python 单引号转义）。
+load_job_env() {
+    local block="$1"
+    eval "$(printf '%s\n' "$block" | sed -e "s/^\([A-Z_]*\)=/\1=/")"
 }
 
 # 解析 sftp 远程目标 —— remote:path 拆成 remote 名与路径
