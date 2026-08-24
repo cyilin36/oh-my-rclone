@@ -197,8 +197,8 @@ run_one_job() {
     # ---- 单任务 webhook（任务级配置）----
     job_end_s="$(date +%s)"
     if [ "${WEBHOOK_ENABLE}" = "true" ]; then
-        local job_status job_start_str job_end_str job_dur
-        if [ "$RESULT" -eq 0 ]; then job_status="成功"; else job_status="失败"; fi
+        local job_status job_icon job_start_str job_end_str job_dur
+        if [ "$RESULT" -eq 0 ]; then job_status="成功"; job_icon="✅"; else job_status="失败"; job_icon="❌"; fi
         # success_only=true 且任务成功才发；成功与否由 RESULT 决定
         if [ "${WEBHOOK_SUCCESS_ONLY}" = "true" ] && [ "$RESULT" -ne 0 ]; then
             log_info "[$JOBNAME] webhook 配置为仅成功通知，本次失败不发送"
@@ -207,7 +207,7 @@ run_one_job() {
             job_end_str="$(date -d "@$job_end_s" '+%F %T' 2>/dev/null || date '+%F %T')"
             job_dur="$(fmt_duration $((job_end_s - job_start_s)))"
             local msg
-            msg="【oh-my-rclone 任务报告】${JOBNAME} - ${job_status}\n"
+            msg="${job_icon} 【oh-my-rclone 任务报告】${JOBNAME} - ${job_status}\n"
             msg+="源: ${SRC}\n"
             msg+="目标: ${REMOTE}:${DEST}\n"
             msg+="上传数据: ${uploaded_bytes}\n"

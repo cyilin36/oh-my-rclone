@@ -55,18 +55,6 @@ main() {
     duration="$(fmt_duration $((t_end - t_start)))"
     log_info "========== 备份批次结束 $(date '+%F %T') 总耗时 $duration =========="
 
-    # ---- 批次汇总 webhook（用全局 webhook 配置判断）----
-    local global_wh
-    global_wh="$(load_global_config 2>/dev/null | grep -E '^webhook=' | head -1 | cut -d= -f2 || echo false)"
-    if [ "${global_wh}" = "true" ]; then
-        local status overall_success_name start_s end_s
-        if [ "$overall_ok" -eq 0 ]; then overall_success_name="成功"; else overall_success_name="失败"; fi
-        start_s="$(date -d "@$t_start" '+%F %T' 2>/dev/null || date '+%F %T')"
-        end_s="$(date -d "@$t_end" '+%F %T' 2>/dev/null || date '+%F %T')"
-        build_batch_notice "$overall_success_name" "$duration" "$start_s" "$end_s" \
-            "$bytes_sum" "$fail_global" "$job_count" "$fail_big"
-    fi
-
     return $overall_ok
 }
 
@@ -120,28 +108,6 @@ run_one_jobblock() {
 
     overall_ok=$(( overall_ok || rc ))
     job_count=$(( job_count + 1 ))
-}
-
-# 组装最终 webhook 文本（send_notify 在 notify.sh 中）
-build_batch_notice() {
-    local status="$1" duration="$2" start_s="$3" end_s="$4" \
-          bytes="$5" fail="$6" jcount="$7" fbytes="$8"
-    local msg
-    msg="【oh-my-rclone 备份报告】${status}\n"
-    msg+="任务数: ${jcount}\n"
-    msg+="上传数据: ${bytes} B\n"
-    msg+="失败文件大小: ${fbytes:-0} B\n"
-    msg+="开始: ${start_s}  结束: ${end_s}\n"
-    msg+="总耗时: ${duration}\n"
-    if [ "$status" = "失败" ]; then
-        msg+="失败文件: ${fail:-（无详细清单，见日志）}\n"
-    else
-        msg+="失败文件: 无\n"
-    fi
-    msg+="\n（完整日志见容器 stdout / /var/lib/oh-my-rclone/.*.log）"
-    # 把字面 \n 解释为真实换行，保证各类推送端正确换行。
-    printf -v msg '%b' "$msg"
-    send_notify "$msg"
 }
 
 main "$@"
