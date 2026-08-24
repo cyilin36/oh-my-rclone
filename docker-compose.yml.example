@@ -13,8 +13,8 @@
 services:
   oh-my-rclone:
     build: .
-    # 也可替换为已构建镜像名
-    # image: local/oh-my-rclone:latest
+    # 构建出的镜像名（与 GitHub Actions 的 IMAGE_NAME 一致，可推送到 Docker Hub）
+    image: cyilin/oh-my-rclone:latest
     container_name: oh-my-rclone
     restart: unless-stopped
     hostname: oh-my-rclone
