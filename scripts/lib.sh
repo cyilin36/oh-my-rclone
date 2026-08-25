@@ -180,38 +180,31 @@ make_reflink_stage() {
     # 源可用性检查
     [ -e "$src" ] || { log_error "[$job] 源路径不存在: $src"; return 1; }
 
-    # 若严格模式且当前 FS 不支持 reflink，报错（由调用方决定是否中止任务）。
-    # 注意必须用 cp -a（保留属性 + 递归复制目录），否则目录复制会 "omitting directory" 退出非零，
-    # 被误判为"不支持 reflink"。
-    if [ "${REFLINK_STRICT}" = "true" ]; then
-        if ! cp -a --reflink=always "$src"/. "$stage"/. </dev/null 2>&1; then
-            log_error "[$job] REFLINK_STRICT 且当前文件系统不支持 reflink（源与暂存须同 FS）"; return 2
-        fi
-    else
-        cp -a --reflink=auto "$src"/. "$stage"/. 2>/dev/null \
-            || cp -a "$src"/. "$stage"/. \
-            || { log_error "[$job] 复制到快照区失败"; return 1; }
-    fi
-
-    # 依据排除规则删除不需要上传的文件（stage 内相对路径 == 源相对路径）
-    local rel delete_count=0
+    # 排除项在复制前生效：被排除的文件/目录从头到尾不复制（符合"直接无视"语义）。
+    # 用 find 遍历源，命中排除规则的路径跳过；其余文件逐个 reflink 复制并保留目录结构。
+    local f rel parent excluded_count=0 copy_count=0
     while IFS= read -r -d '' f; do
-        rel="${f#"$stage"/}"
+        rel="${f#"$src"/}"
         if excluded_path "$rel" file "$rules"; then
-            rm -f -- "$f"; delete_count=$((delete_count+1))
+            excluded_count=$((excluded_count+1))
+            continue
         fi
-    done < <(find "$stage" -type f -print0)
-    # 删除空目录（排除 dir 或删除文件后）
-    while IFS= read -r -d '' d; do
-        rel="${d#"$stage"/}"
-        if excluded_path "$rel" dir "$rules"; then
-            rm -rf -- "$d"
+        parent="${stage}/$(dirname "$rel")"
+        [ -d "$parent" ] || mkdir -p "$parent"
+        if [ "${REFLINK_STRICT}" = "true" ]; then
+            if ! cp -a --reflink=always -- "$f" "$parent/" 2>/dev/null; then
+                log_error "[$job] REFLINK_STRICT 且文件系统不支持 reflink（源与暂存须同 FS）: $rel"; return 2
+            fi
+        else
+            cp -a --reflink=auto -- "$f" "$parent/" 2>/dev/null \
+                || cp -a -- "$f" "$parent/" \
+                || { log_error "[$job] 复制到快照区失败: $rel"; return 1; }
         fi
-    done < <(find "$stage" -depth -type d -empty -print0)
-    # 再清理因删除文件而变空的目录
-    find "$stage" -depth -type d ! -path "$stage" -empty -delete 2>/dev/null || true
+        copy_count=$((copy_count+1))
+    done < <(find "$src" -type f -print0)
 
-    log_info "[$job] reflink 快照完成: $(du -sh "$stage" 2>/dev/null | cut -f1) (排除 ${delete_count} 个文件)"
+    # 排除的目录不复制，因此无需二次删除；仅保留存在的目录结构。
+    log_info "[$job] reflink 快照完成: $(du -sh "$stage" 2>/dev/null | cut -f1) (复制 ${copy_count} 个, 排除 ${excluded_count} 个文件)"
     echo "$stage"
 }
 

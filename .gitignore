@@ -15,6 +15,9 @@ docker-compose.yml
 *.log
 backup.log
 
+# reflink 暂存目录（reflink 副本/运行临时数据，勿提交）
+tmp/
+
 # 编辑器/系统文件
 .DS_Store
 *.swp
