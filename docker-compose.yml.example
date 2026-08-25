@@ -30,10 +30,11 @@ services:
       # - /path/to/docs:/data/docs:ro
 
       # ---- reflink 暂存区：映射到容器 /tmp ----
-      # ⚠️ 需满足两个条件：
-      #   1. 在源目录之外 → 避免 reflink 复制递归
-      #   2. 与源同文件系统 → 否则 reflink 跨设备失败
-      # - /vol1/1000/oh-my-rclone-tmp:/tmp
+      # reflink 副本存放目录，挂载到容器 /tmp。
+      # ⚠️ 若该目录位于源目录内部（如 <宿主机源>/oh-my-rclone/tmp），
+      #    必须同时在 config.toml 任务里加排除（exclude = ["dir=oh-my-rclone/tmp/"]），
+      #    否则 reflink 复制会递归。详见 README「reflink 快照」。
+      # - /path/to/oh-my-rclone/tmp:/tmp
 
       # ---- 宿主机 Docker socket（docker 适配功能必需）----
       # 若 DOCKER_ADAPT_ENABLE=false 可移除下面这行。

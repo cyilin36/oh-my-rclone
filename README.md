@@ -146,12 +146,19 @@ services:
     volumes:
       - /path/to/postgres_data:/data/postgres:ro    # 宿主机绝对路径 → /data/postgres
       - /path/to/docs:/data/docs:ro
-      - /var/lib/oh-my-rclone/tmp:/tmp               # reflink 暂存区
+      - /path/to/oh-my-rclone/tmp:/tmp               # reflink 暂存区（源内时需排除，见下）
       - /var/run/docker.sock:/var/run/docker.sock:ro # docker 适配
       - ./conf:/etc/oh-my-rclone/conf:ro
 ```
 
 > 挂载只在这里配；config.toml 任务的 `src` 填对应的容器内路径（如 `/data/postgres`）。
+>
+> ⚠️ **reflink 暂存区**：若 `/tmp` 的宿主机路径位于源目录**内部**（如源挂载整个 `<源父目录>`、tmp 为 `<源父目录>/oh-my-rclone/tmp`），**必须**在对应任务加排除：
+> ```toml
+> [[job]]
+> src = "/data/docker-backup"
+> exclude = ["dir=oh-my-rclone/tmp/"]   # 排除 reflink 暂存区，避免复制递归
+> ```
 
 ---
 
