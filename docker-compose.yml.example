@@ -30,7 +30,10 @@ services:
       # - /path/to/docs:/data/docs:ro
 
       # ---- reflink 暂存区：映射到容器 /tmp ----
-      # - /var/lib/oh-my-rclone/tmp:/tmp
+      # ⚠️ 需满足两个条件：
+      #   1. 在源目录之外 → 避免 reflink 复制递归
+      #   2. 与源同文件系统 → 否则 reflink 跨设备失败
+      # - /vol1/1000/oh-my-rclone-tmp:/tmp
 
       # ---- 宿主机 Docker socket（docker 适配功能必需）----
       # 若 DOCKER_ADAPT_ENABLE=false 可移除下面这行。
