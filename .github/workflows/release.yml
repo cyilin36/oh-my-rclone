@@ -40,27 +40,19 @@ jobs:
           echo "prerelease=${PRERELEASE}"   >> "${GITHUB_OUTPUT}"
           echo "make_latest=${MAKE_LATEST}" >> "${GITHUB_OUTPUT}"
 
-      # 幂等：若同名 release 已存在（如重跑），先删除再重建，避免 gh 报 already exists
-      - name: Delete existing release (idempotent)
-        run: |
-          if gh release view "$TAG" >/dev/null 2>&1; then
-            echo "检测到已存在 release [$TAG]，删除后重建"
-            gh release delete "$TAG" --yes
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-
-      # 用 GitHub 官方 gh CLI 创建 Release（runner 预装，无 Node20 依赖）
-      # 注意：--latest 与显式 tag 参数在某些 gh 版本冲突，这里显式分开处理
+      # 官方推荐：softprops/action-gh-release@v2 创建 Release（v1.0.0 已用此成功过）
+      # 幂等：同名 release 已存在时自动跳过（update_release_body 处理）
       - name: Create GitHub Release
-        run: |
-          if [[ "$PRERELEASE" == "true" ]]; then
-            gh release create "$TAG" --title "$TAG" --generate-notes --prerelease --latest=false
-          else
-            gh release create "$TAG" --title "$TAG" --generate-notes --latest
-          fi
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ steps.version.outputs.tag }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: ${{ steps.version.outputs.tag }}
+          body: |
+            ## oh-my-rclone ${{ steps.version.outputs.version }}
+
+            基于 rclone 的单向同步备份 Docker 工具。
+            详见 [README.md](https://github.com/cyilin36/oh-my-rclone/blob/main/README.md)
+          generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.prerelease }}
+          make_latest: ${{ steps.version.outputs.make_latest }}
+          fail_on_unmatched_files: true
