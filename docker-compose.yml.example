@@ -3,7 +3,7 @@
 # ⚠️ 使用前：
 #   - 复制 .env.example 为 .env（默认远端/开关/定时/webhook 默认值）
 #   - 复制 conf/config.toml.example 为 conf/config.toml（每个任务一个块）
-#   - 宿主机【挂载】全部在这里配置（绝对路径），.env 不承载路径
+#   - 宿主机【挂载】全部在这里配置；源目录/reflink 暂存建议绝对路径，项目内目录（如 logs）可用相对路径；.env 不承载路径
 #
 # 用法：
 #   docker compose up -d --build        # 构建并启动
@@ -23,7 +23,7 @@ services:
       - TZ=${TZ}
       - CONTAINER_NAME=oh-my-rclone
     volumes:
-      # ---- 源数据目录（宿主机【绝对路径】挂载）----
+      # ---- 源数据目录（宿主机【外部数据，建议绝对路径】挂载）----
       # 每个源挂到容器 /data 下唯一子目录；config.toml 任务的 src 填对应的容器内路径。
       # 例：postgres 源 → /data/postgres；docs 源 → /data/docs
       # - /path/to/postgres_data:/data/postgres:ro
@@ -42,6 +42,11 @@ services:
 
       # ---- 配置文件（config.toml + 可选 rclone.conf / 密钥）----
       - ./conf:/etc/oh-my-rclone/conf:ro
+
+      # ---- 日志持久化（可选）：不挂载则日志在容器内，容器重建即清空 ----
+      # 挂载宿主目录到 $LOG_DIR，配合自动清理（LOG_RETENTION_DAYS 默认 7 天）跨重建保留。
+      # 项目内目录用相对路径即可（相对 compose 文件解析，与本文件 ./conf 一致）。
+      # - ./logs:/var/lib/oh-my-rclone/logs
 
       # 如需 sftp 密钥登录，挂载私钥（按需取消注释）：
       # - /path/to/id_ed25519:/keys/id_ed25519:ro

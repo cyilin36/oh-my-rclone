@@ -12,8 +12,8 @@
 | 文件 | 职责 | 内容 |
 |---|---|---|
 | **`.env`** | **全局默认层** | 默认远端服务器、功能开关默认值、默认定时、webhook 全局默认 |
-| **`conf/config.toml`** | **任务层 + 覆盖层**（frpc 风格） | 每个任务一个 `[[job]]` 块：src/dest/排除/webhook/远端覆盖/开关覆盖 |
-| **`docker-compose.yml`** | 宿主机挂载 | 所有宿主机目录挂载（绝对路径）、env_file 引入 `.env` |
+| **`conf/config.toml`** | **任务层 + 覆盖层** | 每个任务一个 `[[job]]` 块：src/dest/排除/webhook/远端覆盖/开关覆盖 |
+| **`docker-compose.yml`** | 宿主机挂载 | 宿主机挂载（外部数据建议绝对路径，项目内目录可用相对路径）、env_file 引入 `.env` |
 
 - **优先级**：任务块 > config.toml 顶部(可选) > `.env` 默认。任务没写的字段自动继承 `.env`。
 - **挂载只写 compose**；**src/dest、排除、任务级 webhook 只写 config.toml**；`.env` 只做默认。
@@ -34,7 +34,8 @@ oh-my-rclone/
 │   ├── run-backup.sh            # 遍历 config.toml 的任务串行执行、汇总、webhook
 │   ├── job.sh                   # 单条任务流程（reflink/docker/排除/统计/单任务 webhook）
 │   ├── lib.sh                   # 公共库（解析、日志、docker pause、reflink、排除）
-│   └── notify.sh                # webhook 发送
+│   ├── notify.sh                # webhook 发送
+│   └── cleanup-logs.sh          # 日志自动清理（轮转 + 按保留天数删除）
 └── conf/
     └── config.toml.example      # 任务配置示例（复制为 config.toml）
 ```
@@ -49,7 +50,7 @@ cp .env.example .env
 cp conf/config.toml.example conf/config.toml
 #   → 编辑 .env（默认远端/开关/定时/webhook 默认）
 #   → 编辑 conf/config.toml（每个任务一个块）
-#   → 编辑 docker-compose.yml（宿主机源目录挂载，绝对路径）
+#   → 编辑 docker-compose.yml（源目录/reflink 暂存建议绝对路径，项目内目录如 logs 可用相对路径）
 
 # 2) 启动
 docker compose up -d --build
@@ -149,6 +150,7 @@ services:
       - /path/to/oh-my-rclone/tmp:/tmp               # reflink 暂存区（源内时需排除，见下）
       - /var/run/docker.sock:/var/run/docker.sock:ro # docker 适配
       - ./conf:/etc/oh-my-rclone/conf:ro
+      - ./logs:/var/lib/oh-my-rclone/logs   # 项目内目录，相对路径即可（相对 compose 文件解析）
 ```
 
 > 挂载只在这里配；config.toml 任务的 `src` 填对应的容器内路径（如 `/data/postgres`）。
@@ -217,6 +219,23 @@ curl -X POST "${ASTROBOT_PUSH_URL}" \
 
 默认鉴权字段名 `token`（可经 `ASTROBOT_PUSH_KEY` 覆盖）。`WEBHOOK_SUCCESS_ONLY` 可设为仅在成功时通知。
 
+### 5. 日志与自动清理
+
+统一把日志收纳到容器内 `$LOG_DIR`（默认 `/var/lib/oh-my-rclone/logs`），并**自动清理**，默认保留 **7 天**、可配置：
+
+```
+logs/
+├── backup.log                    # 批次总日志：每次备份的全部 INFO/WARN/ERROR（时间戳+级别）
+├── rclone/<job>-<时间戳>.log     # 每任务 rclone -v 详细输出
+└── webhook/webhook-fail-<时间戳>.txt  # webhook 失败时的消息存档
+```
+
+- **保留天数**：`LOG_RETENTION_DAYS`（默认 `7`）——mtime 超过 N 天的日志自动删除；`0` 关闭按时长清理。
+- **大小轮转**：`backup.log` 超过 `LOG_MAX_SIZE`（默认 `20M`）自动轮转为 `backup.log.1..N`（保留 `LOG_ROTATE_KEEP=3` 份）。
+- **触发时机**：容器启动、每批备份结束、每日 cron（`LOG_CLEANUP_SCHEDULE`，默认 `30 4 * * *`，与备份错开）；可经 `LOG_CLEANUP_ENABLE=false` 一键关闭。
+- **手动清理**：`docker compose exec oh-my-rclone /scripts/cleanup-logs.sh`
+- **持久化**：日志默认在容器内（重建即清空）；如需跨重建保留，在 compose 挂载宿主目录到 `$LOG_DIR`（见 `docker-compose.yml.example` 注释）。若该目录位于备份源目录**内部**（如挂到项目内 `./logs` 且源为整个父目录），需在对应任务加排除（`exclude = ["dir=oh-my-rclone/logs/"]`），避免递归上传日志。
+
 ---
 
 ## 常用运维命令
@@ -226,6 +245,7 @@ docker compose up -d --build                                   # 构建启动
 docker compose logs -f oh-my-rclone                            # 日志
 docker compose exec oh-my-rclone /scripts/run-backup.sh        # 立即备份
 docker compose exec oh-my-rclone /scripts/run-backup.sh FORCE_DRY_RUN=1  # dry-run 预检
+docker compose exec oh-my-rclone /scripts/cleanup-logs.sh      # 手动清理日志（保留期内轮转/删除）
 docker compose restart oh-my-rclone                            # 重启
 ```
 
@@ -236,7 +256,7 @@ docker compose restart oh-my-rclone                            # 重启
 - **传输**：sftp，密码优先（`sshpass`），可选密钥。远端凭据由 `.env`/`config.toml` 自动生成 `rclone.conf`，启动时 `rclone obscure` 加密。
 - **调度**：容器内 `dcron` 按全局 `CRON_SCHEDULE` 触发 `run-backup.sh`；`flock` 防止重入。
 - **统计口径**：上传量为 rclone 报告字节；失败文件大小按本地对应源文件 `stat` 合计；rclone 输出解析失败时保留原始日志并标注。
-- **挂载绝对路径**：宿主机目录一律在 `docker-compose.yml` 使用绝对路径。
+- **挂载路径建议**：宿主机**外部数据路径**（备份源目录、reflink 暂存 `tmp/`）建议用**绝对路径**明确指向；**项目内目录**（如 `conf/`、`logs/`）可用**相对路径**（相对 compose 文件所在目录解析）。
 - **多任务串行**：避免 tmp 冲突与重复 pause。
 - 单向覆盖同步。如需版本历史可自行在任务中引入 rclone `--backup-dir`。
 - 敏感项（密码/token）在 `.env` / `conf/config.toml`（已 `.gitignore`，不随仓库提交）。
@@ -252,6 +272,7 @@ docker compose restart oh-my-rclone                            # 重启
 | reflink 变成了普通复制 | 源与 `/tmp` 不在同一可 reflink 文件系统（btrfs/xfs）；这是预期降级 |
 | 没有 webhook | 确认 `WEBHOOK_ENABLE=true`（全局或任务级）、`ASTROBOT_PUSH_URL` 可达、token 正确 |
 | 任务没执行 | 检查 `conf/config.toml` 语法、任务块是否 `enabled = false`、是否有 name/src/dest |
+| 日志不清理 / 担心占磁盘 | 检查 `LOG_CLEANUP_ENABLE` 与 `LOG_RETENTION_DAYS`；日志默认在容器内，长期不用可手动 `docker compose exec oh-my-rclone /scripts/cleanup-logs.sh`，或挂载卷持久化 |
 | 想要测试失败分支 | 用不存在/无权限的 `dest`；`FORCE_DRY_RUN=1` 不会真正上传 |
 
 ---
@@ -268,6 +289,7 @@ docker compose restart oh-my-rclone                            # 重启
 | 同步排除项（`ext=` / `dir=` / `path=` / `glob=`） | ✅ 单元 + 容器内均验证 |
 | docker 适配（whitelist，真实 pause/unpause） | ✅ 只对测试容器执行 pause→快照→unpause；工具自身从未被 pause |
 | 单任务 webhook + 批次汇总 webhook | ✅ 每任务各发一份 + 批次汇总一份，内容含成败/上传量/失败文件/大小/起止时间/耗时 |
+| 日志与自动清理（LOG_DIR 结构 / 保留天数删除 / 大小轮转 / 清理 cron / 手动触发） | ✅ 隔离容器内验证（临时 conf + local 后端，未触碰生产） |
 | cron 注册 + 容器常驻 | ✅ 容器内 crond 运行、crontab 正确 |
 | docker compose 配置解析 | ✅ `docker compose config` 通过 |
 

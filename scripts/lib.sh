@@ -27,6 +27,14 @@ OMR_TMP_ROOT="${OMR_TMP_ROOT:-/tmp/oh-my-rclone}"      # reflink 快照根目录
 : "${UNPAUSE_RETRY:=5}"
 : "${UNPAUSE_WAIT:=2}"
 
+# 日志与自动清理（默认值，可经 .env / compose 环境变量覆盖）
+LOG_DIR="${LOG_DIR:-/var/lib/oh-my-rclone/logs}"   # 日志根目录（容器内路径）
+: "${LOG_RETENTION_DAYS:=7}"   # 日志保留天数；文件 mtime 超过 N 天删除；0=关闭按时长清理
+: "${LOG_CLEANUP_ENABLE:=true}" # 自动清理总开关（轮转 + 按时长删除）
+: "${LOG_MAX_SIZE:=20M}"       # backup.log 超过此大小即轮转（B/KB/MB/GB/KiB/MiB/GiB/K/M/G/T）
+: "${LOG_ROTATE_KEEP:=3}"      # 轮转保留的旧 backup.log 份数
+: "${LOG_CLEANUP_SCHEDULE:=30 4 * * *}"  # 每日日志清理 cron 时间（与备份时间错开）
+
 # 本容器名：通过 /proc/self/cgroup 或 hostname 推断，用于“永远不自冻”强守卫。
 CONTAINER_NAME="${CONTAINER_NAME:-$(hostname 2>/dev/null || echo unknown)}"
 if [ -z "${CONTAINER_NAME}" ] || [ "${CONTAINER_NAME}" = "unknown" ]; then
@@ -329,15 +337,64 @@ to_bytes() {
     unit=$(echo "$v" | grep -oE '[A-Za-z]+$' || true)
     num=$(echo "$v" | grep -oE '^[0-9.]+' || echo 0)
     case "$unit" in
-        KiB|KiB) mul=1024 ;;
-        MiB) mul=$((1024*1024)) ;;
-        GiB) mul=$((1024*1024*1024)) ;;
-        TiB) mul=$((1024*1024*1024*1024)) ;;
+        KiB|KiB|K) mul=1024 ;;
+        MiB|M) mul=$((1024*1024)) ;;
+        GiB|G) mul=$((1024*1024*1024)) ;;
+        TiB|T) mul=$((1024*1024*1024*1024)) ;;
         kB|KB) mul=1000 ;;
         MB) mul=$((1000*1000)) ;;
         GB) mul=$((1000*1000*1000)) ;;
         B) mul=1 ;;
         *) mul=1 ;;
     esac
-    awk -v n="$num" -v m="$mul" 'BEGIN{printf "%d", n*m}'
+    awk -v n="$num" -v m="$mul" 'BEGIN{printf "%.0f", n*m}'
+}
+
+# ----------------------------------------------------------- 日志目录与自动清理
+# 初始化日志目录结构（幂等）。所有保留日志统一放 $LOG_DIR 下。
+init_logs() {
+    mkdir -p "$LOG_DIR" "$LOG_DIR/rclone" "$LOG_DIR/webhook" 2>/dev/null \
+        || log_warn "无法创建日志目录: $LOG_DIR"
+}
+
+# backup.log 按大小轮转：超过 LOG_MAX_SIZE 时顺移为 .1..N 并重建当前文件。
+rotate_backup_log() {
+    [ -f "$LOG_DIR/backup.log" ] || return 0
+    local max_bytes size
+    max_bytes="$(to_bytes "$LOG_MAX_SIZE")"
+    [ "$max_bytes" -gt 0 ] || return 0
+    size="$(stat -c%s "$LOG_DIR/backup.log" 2>/dev/null || echo 0)"
+    [ "$size" -gt "$max_bytes" ] || return 0
+
+    # 顺移旧文件（最旧的 .N 丢弃），当前文件重建为空。
+    rm -f "$LOG_DIR/backup.log.${LOG_ROTATE_KEEP}"
+    local i
+    for i in $(seq "$LOG_ROTATE_KEEP" -1 1); do
+        [ -f "$LOG_DIR/backup.log.$((i-1))" ] && mv -f "$LOG_DIR/backup.log.$((i-1))" "$LOG_DIR/backup.log.$i"
+    done
+    mv -f "$LOG_DIR/backup.log" "$LOG_DIR/backup.log.1"
+    : > "$LOG_DIR/backup.log"
+    log_info "backup.log 超过 ${LOG_MAX_SIZE}，已轮转（保留 ${LOG_ROTATE_KEEP} 份旧日志）"
+}
+
+# 自动清理：按大小轮转 backup.log + 按保留天数删除过期文件 + 清理空子目录。
+# 三处触发：entrypoint 启动、每批备份结束、每日 cron（scripts/cleanup-logs.sh）。
+cleanup_logs() {
+    [ "${LOG_CLEANUP_ENABLE}" = "true" ] || { log_info "日志自动清理已禁用 (LOG_CLEANUP_ENABLE=false)"; return 0; }
+    init_logs
+
+    rotate_backup_log
+
+    # 按保留天数删除（mtime 严格超过 N 天）。LOG_RETENTION_DAYS=0 视为不清理。
+    if [ "${LOG_RETENTION_DAYS:-0}" -gt 0 ] 2>/dev/null; then
+        local deleted=0 f
+        while IFS= read -r -d '' f; do
+            rm -f -- "$f" && deleted=$((deleted+1))
+        done < <(find "$LOG_DIR" -type f -mtime +"$LOG_RETENTION_DAYS" -print0 2>/dev/null)
+        # 清理空子目录（保留 LOG_DIR 根目录本身）
+        find "$LOG_DIR" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+        log_info "日志清理完成: 删除 ${deleted} 个超过 ${LOG_RETENTION_DAYS} 天的文件（$LOG_DIR）"
+    else
+        log_info "日志按时长清理未启用 (LOG_RETENTION_DAYS=0)，仅按大小轮转 backup.log"
+    fi
 }

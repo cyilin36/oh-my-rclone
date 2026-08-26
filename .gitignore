@@ -14,6 +14,7 @@ docker-compose.yml
 # 运行时生成的数据/日志（如部署在项目目录内时）
 *.log
 backup.log
+logs/
 
 # reflink 暂存目录（reflink 副本/运行临时数据，勿提交）
 tmp/

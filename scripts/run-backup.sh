@@ -55,6 +55,9 @@ main() {
     duration="$(fmt_duration $((t_end - t_start)))"
     log_info "========== 备份批次结束 $(date '+%F %T') 总耗时 $duration =========="
 
+    # 批次结束后触发日志自动清理（轮转 + 按保留天数删除），维护留痕进 backup.log
+    cleanup_logs
+
     return $overall_ok
 }
 

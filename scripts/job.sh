@@ -109,9 +109,9 @@ run_one_job() {
     fi
 
     # ---- 执行 rclone 上传 ----
-    local logdir="/var/lib/oh-my-rclone"
+    local logdir="${LOG_DIR:-/var/lib/oh-my-rclone/logs}/rclone"
     mkdir -p "$logdir" 2>/dev/null || logdir="${STATS_DIR:-/tmp}"
-    tmp_out="$logdir/${JOBNAME}.$(date +%s).log"
+    tmp_out="$logdir/${JOBNAME}.$(date +%Y%m%d-%H%M%S)-$$.log"
     local args=( sync "$rclone_src" "${REMOTE}:${DEST}" --config "${RCLONE_CONF}" -v --stats-one-line --stats 5s )
     # reflink 关闭时，无需 --dry-run（正式执行）。
     # 若传入 FORCE_DRY_RUN=1 则 dry-run（测试/预检用）。
