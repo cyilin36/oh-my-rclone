@@ -53,7 +53,8 @@ send_notify() {
         --data "$(python3 -c 'import json,sys; print(json.dumps({"content": sys.argv[1], "umo": sys.argv[2]}))' "$msg" "$umo")" 2>/dev/null)"
     if [ "$?" -ne 0 ] || [ -z "$code" ] || [ "${code:0:1}" = "5" ] || [ "$code" = "0" ]; then
         log_error "webhook 发送失败 (http=$code) 至 $endpoint"
-        echo "$msg" > /var/lib/oh-my-rclone/webhook-fail-$(date +%s).txt 2>/dev/null || true
+        mkdir -p "${LOG_DIR:-/var/lib/oh-my-rclone/logs}/webhook" 2>/dev/null || true
+        echo "$msg" > "${LOG_DIR:-/var/lib/oh-my-rclone/logs}/webhook/webhook-fail-$(date +%Y%m%d-%H%M%S).txt" 2>/dev/null || true
         return 1
     fi
     log_info "webhook 已发送 (http=$code)"

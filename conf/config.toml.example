@@ -1,4 +1,4 @@
-# config.toml - oh-my-rclone 任务配置（frpc 风格，一个任务一个 [[job]] 块）
+# config.toml - oh-my-rclone 任务配置（一个任务一个 [[job]] 块）
 #
 # 配置分层：
 #   .env 提供【全局默认】（默认远端、开关、定时、webhook 全局默认）

@@ -88,8 +88,11 @@ setup_cron() {
     mkdir -p /var/spool/cron/crontabs
     local crontab_file="/var/spool/cron/crontabs/root"
     # 使用 flock 防止容器内并发重入导致重复备份
-    echo "${schedule} flock -n /var/lib/oh-my-rclone/backup.lock ${SCRIPT_DIR}/run-backup.sh >> /var/lib/oh-my-rclone/backup.log 2>&1" \
-        > "$crontab_file"
+    {
+        echo "${schedule} flock -n /var/lib/oh-my-rclone/backup.lock ${SCRIPT_DIR}/run-backup.sh >> ${LOG_DIR}/backup.log 2>&1"
+        # 每日日志自动清理（与备份时间错开），flock 防并发
+        echo "${LOG_CLEANUP_SCHEDULE} flock -n ${LOG_DIR}/cleanup.lock ${SCRIPT_DIR}/cleanup-logs.sh >> ${LOG_DIR}/backup.log 2>&1"
+    } > "$crontab_file"
     # 启动 dcron
     if command -v crond >/dev/null 2>&1; then
         /usr/sbin/crond 2>/dev/null || crond 2>/dev/null || true
@@ -105,18 +108,22 @@ keepalive() {
     log_info "oh-my-rclone 已就绪。容器名: ${CONTAINER_NAME}（将被 docker 适配强制排除）"
     log_info "rclone 版本: $(rclone version 2>/dev/null | head -1 || echo unknown)"
     log_info "reflink=${REFLINK_ENABLE} docker_adapt=${DOCKER_ADAPT_ENABLE} webhook=${WEBHOOK_ENABLE}"
+    log_info "日志: dir=${LOG_DIR} retention_days=${LOG_RETENTION_DAYS} max_size=${LOG_MAX_SIZE} cleanup=${LOG_CLEANUP_ENABLE}"
     if [ "${DOCKER_ADAPT_ENABLE}" = "true" ] && [ -S "${DOCKER_API}" ]; then
         log_warn "docker 适配已开启，将与宿主机 Docker 交互；本容器始终被排除避免自冻。"
     fi
     # tail 备份日志到 stdout，并常驻
-    touch /var/lib/oh-my-rclone/backup.log
-    tail -F /var/lib/oh-my-rclone/backup.log &
+    init_logs
+    touch "${LOG_DIR}/backup.log"
+    tail -F "${LOG_DIR}/backup.log" &
     # 无限循环保持存活
     while :; do sleep 3600; done
 }
 
 main() {
     load_globals_into_env
+    init_logs
+    cleanup_logs
     generate_rclone_conf || log_warn "rclone.conf 未生成，请检查 config.toml / .env 的远端配置"
     setup_cron
     keepalive

@@ -43,6 +43,10 @@ services:
       # ---- 配置文件（config.toml + 可选 rclone.conf / 密钥）----
       - ./conf:/etc/oh-my-rclone/conf:ro
 
+      # ---- 日志持久化（可选）：不挂载则日志在容器内，容器重建即清空 ----
+      # 挂载宿主目录到 $LOG_DIR，配合自动清理（LOG_RETENTION_DAYS 默认 7 天）跨重建保留。
+      # - /path/to/oh-my-rclone/logs:/var/lib/oh-my-rclone/logs
+
       # 如需 sftp 密钥登录，挂载私钥（按需取消注释）：
       # - /path/to/id_ed25519:/keys/id_ed25519:ro
 
