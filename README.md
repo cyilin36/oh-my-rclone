@@ -13,7 +13,7 @@
 |---|---|---|
 | **`.env`** | **全局默认层** | 默认远端服务器、功能开关默认值、默认定时、webhook 全局默认 |
 | **`conf/config.toml`** | **任务层 + 覆盖层** | 每个任务一个 `[[job]]` 块：src/dest/排除/webhook/远端覆盖/开关覆盖 |
-| **`docker-compose.yml`** | 宿主机挂载 | 所有宿主机目录挂载（绝对路径）、env_file 引入 `.env` |
+| **`docker-compose.yml`** | 宿主机挂载 | 宿主机挂载（外部数据建议绝对路径，项目内目录可用相对路径）、env_file 引入 `.env` |
 
 - **优先级**：任务块 > config.toml 顶部(可选) > `.env` 默认。任务没写的字段自动继承 `.env`。
 - **挂载只写 compose**；**src/dest、排除、任务级 webhook 只写 config.toml**；`.env` 只做默认。
@@ -50,7 +50,7 @@ cp .env.example .env
 cp conf/config.toml.example conf/config.toml
 #   → 编辑 .env（默认远端/开关/定时/webhook 默认）
 #   → 编辑 conf/config.toml（每个任务一个块）
-#   → 编辑 docker-compose.yml（宿主机源目录挂载，绝对路径）
+#   → 编辑 docker-compose.yml（源目录/reflink 暂存建议绝对路径，项目内目录如 logs 可用相对路径）
 
 # 2) 启动
 docker compose up -d --build
@@ -150,6 +150,7 @@ services:
       - /path/to/oh-my-rclone/tmp:/tmp               # reflink 暂存区（源内时需排除，见下）
       - /var/run/docker.sock:/var/run/docker.sock:ro # docker 适配
       - ./conf:/etc/oh-my-rclone/conf:ro
+      - ./logs:/var/lib/oh-my-rclone/logs   # 项目内目录，相对路径即可（相对 compose 文件解析）
 ```
 
 > 挂载只在这里配；config.toml 任务的 `src` 填对应的容器内路径（如 `/data/postgres`）。
@@ -233,7 +234,7 @@ logs/
 - **大小轮转**：`backup.log` 超过 `LOG_MAX_SIZE`（默认 `20M`）自动轮转为 `backup.log.1..N`（保留 `LOG_ROTATE_KEEP=3` 份）。
 - **触发时机**：容器启动、每批备份结束、每日 cron（`LOG_CLEANUP_SCHEDULE`，默认 `30 4 * * *`，与备份错开）；可经 `LOG_CLEANUP_ENABLE=false` 一键关闭。
 - **手动清理**：`docker compose exec oh-my-rclone /scripts/cleanup-logs.sh`
-- **持久化**：日志默认在容器内（重建即清空）；如需跨重建保留，在 compose 挂载宿主目录到 `$LOG_DIR`（见 `docker-compose.yml.example` 注释）。
+- **持久化**：日志默认在容器内（重建即清空）；如需跨重建保留，在 compose 挂载宿主目录到 `$LOG_DIR`（见 `docker-compose.yml.example` 注释）。若该目录位于备份源目录**内部**（如挂到项目内 `./logs` 且源为整个父目录），需在对应任务加排除（`exclude = ["dir=oh-my-rclone/logs/"]`），避免递归上传日志。
 
 ---
 
@@ -255,7 +256,7 @@ docker compose restart oh-my-rclone                            # 重启
 - **传输**：sftp，密码优先（`sshpass`），可选密钥。远端凭据由 `.env`/`config.toml` 自动生成 `rclone.conf`，启动时 `rclone obscure` 加密。
 - **调度**：容器内 `dcron` 按全局 `CRON_SCHEDULE` 触发 `run-backup.sh`；`flock` 防止重入。
 - **统计口径**：上传量为 rclone 报告字节；失败文件大小按本地对应源文件 `stat` 合计；rclone 输出解析失败时保留原始日志并标注。
-- **挂载绝对路径**：宿主机目录一律在 `docker-compose.yml` 使用绝对路径。
+- **挂载路径建议**：宿主机**外部数据路径**（备份源目录、reflink 暂存 `tmp/`）建议用**绝对路径**明确指向；**项目内目录**（如 `conf/`、`logs/`）可用**相对路径**（相对 compose 文件所在目录解析）。
 - **多任务串行**：避免 tmp 冲突与重复 pause。
 - 单向覆盖同步。如需版本历史可自行在任务中引入 rclone `--backup-dir`。
 - 敏感项（密码/token）在 `.env` / `conf/config.toml`（已 `.gitignore`，不随仓库提交）。
