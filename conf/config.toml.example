@@ -11,6 +11,9 @@
 # [global]
 # reflink = true
 # webhook = false
+#
+# ⚠️ docker 适配（docker_adapt / docker_mode / docker_containers / docker_stop_containers /
+#    docker_stop_timeout）为【全局配置】，只在 .env（或此处顶部）设置，任务块不支持覆盖。
 
 # ===== 任务定义：一个任务一个块 =====
 # 每个任务必须有 name / src / dest；其余可选，没写继承 .env。

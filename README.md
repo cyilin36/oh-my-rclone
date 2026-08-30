@@ -82,6 +82,8 @@ REFLINK_ENABLE=true
 DOCKER_ADAPT_ENABLE=false
 DOCKER_MODE=whitelist
 DOCKER_CONTAINERS=postgres,mysql
+# DOCKER_STOP_CONTAINERS=myapp          # 这些容器改用 stop/start（不做 pause），见“特别功能 2.1”
+# DOCKER_STOP_TIMEOUT=30                 # docker stop 等容器退出的秒数
 FAIL_LIST_MAX=50
 
 # webhook 全局默认（任务可在 config.toml 覆盖）
@@ -182,11 +184,26 @@ services:
 - `DOCKER_MODE=blacklist`：把 `DOCKER_CONTAINERS` 记录表内的容器排除，处理其余运行中容器。
   > ⚠️ **blacklist 有真实风险**：它会对**记录表之外所有运行中的容器**执行 pause/unpause。若你有很多业务容器且未全部列入记录表，它们都会被短暂冻结。
   > **强烈建议优先使用 `whitelist`**。
-- **必定排除本容器**（`oh-my-rclone` / 运行时容器名），**绝不 pause 自身** → 杜绝冻结自身导致死循环。
+- **必定排除本容器**（`oh-my-rclone` / 运行时容器名），**绝不 pause/stop 自身** → 杜绝冻结/停机自身导致死循环。
 - 与 reflink 联动：
   - reflink **关**：pause(命中容器) → **全程** rclone 上传 → unpause。
   - reflink **开**：pause(命中容器) → 完成快照（瞬时）→ **立即 unpause** 恢复业务容器 → rclone 后台上传快照。
 - `trap` 保障 pause 后必有 unpause（含重试 & 超时）。
+
+### 2.1 stop/start（替代 pause/unpause）
+
+开启 docker 适配时，`DOCKER_STOP_CONTAINERS` 列出的容器不做 pause/unpause，改为：**快照前 `docker stop`，快照后 `docker start`**。
+
+- `DOCKER_STOP_CONTAINERS`（逗号分隔容器名）：要走 stop/start 的容器。
+- `DOCKER_STOP_TIMEOUT`（默认 30 秒）：`docker stop` 等容器退出的秒数，超时会被强杀。
+- 这些容器**同时从 pause 名单里剔除**（whitelist/blacklist 都生效）；若某容器同时命中记录表和 stop 列表，以 **stop 列表为准**。
+- **本容器（`oh-my-rclone`）绝不会被 stop**。
+- 和 reflink 一起用时：
+  - reflink **开**：stop(命中容器) + pause(其余命中) → 做快照（很快）→ **马上 start + unpause** 恢复业务 → rclone 后台上传快照。
+  - reflink **关**：stop + pause → **全程** rclone 上传 → start + unpause。
+- ⚠️ **停多久**：建议这些容器所在任务**开启 reflink**——只停做快照那一下（秒级~分钟级）；reflink 关的话，容器整个上传期间都停着。
+- **失败恢复**：任何一步失败（stop 失败、快照失败、上传失败），被停的容器都会尝试 start 回来（带重试 + `trap` 兜底）；stop 失败时任务**直接中止**。
+- 该配置为**全局**（只在 `.env` 设置，不跟任务走，和 docker 适配其它配置一致）。
 
 ### 3. 同步目录排除项
 
@@ -269,6 +286,8 @@ docker compose restart oh-my-rclone                            # 重启
 |---|---|
 | 容器启动报"未生成任何 sftp 远端" | 在 `.env` 填 `REMOTE_HOST`（默认远端），或任务块填 `remote_host` |
 | docker 适配无效果 | 确认 `DOCKER_ADAPT_ENABLE=true` 且挂载了 `docker.sock`、容器名正确 |
+| stop/start 没生效 | 确认 `DOCKER_ADAPT_ENABLE=true`、容器名写入 `DOCKER_STOP_CONTAINERS` 且与运行容器名一致 |
+| 被 stop 的容器没 start 回来 | 查日志 `已 start 容器` / `start 失败`；工具会自动重试，并在任务结束经 `trap` 兜底 start |
 | reflink 变成了普通复制 | 源与 `/tmp` 不在同一可 reflink 文件系统（btrfs/xfs）；这是预期降级 |
 | 没有 webhook | 确认 `WEBHOOK_ENABLE=true`（全局或任务级）、`ASTROBOT_PUSH_URL` 可达、token 正确 |
 | 任务没执行 | 检查 `conf/config.toml` 语法、任务块是否 `enabled = false`、是否有 name/src/dest |

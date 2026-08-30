@@ -32,12 +32,18 @@ STAGE=""
 
 # docker 待处理集合（引用级），仅为会话内安全引用避免被误清
 PAUSE_LIST=""
+STOP_LIST=""
 
 _cleanup_job() {
     # 1) 无论成败，确保已 pause 的容器被 unpause（自身永不在列表中）
     if [ -n "$PAUSE_LIST" ]; then
         log_info "[$JOBNAME] 任务结束，确保 unpause: $PAUSE_LIST"
         docker_unpause_all "$PAUSE_LIST" || true
+    fi
+    # 1.5) 无论成败，确保被 stop 的容器已 start（start 一个本来就在跑的容器没副作用）
+    if [ -n "$STOP_LIST" ]; then
+        log_info "[$JOBNAME] 任务结束，确保 start: $STOP_LIST"
+        docker_start_all "$STOP_LIST" || true
     fi
     # 2) 删除 reflink 快照，避免磁盘占用
     if [ -n "$JOBNAME" ] && [ "${REFLINK_ENABLE}" = "true" ]; then
@@ -49,6 +55,7 @@ trap '_cleanup_job' EXIT
 run_one_job() {
     local start_total end_total
     local job_start_s job_end_s
+    local coop_summary=""
     job_start_s="$(date +%s)"
     if [ -z "$SRC" ] || [ -z "$DEST" ]; then
         log_error "[$JOBNAME] 缺少 SRC 或 DEST"; return 1
@@ -62,11 +69,13 @@ run_one_job() {
     rules="${rules}${rules:+$'\n'}dir=${OMR_TMP_ROOT#/}"
     rules="${rules}${rules:+$'\n'}path=${OMR_TMP_ROOT#/}"
 
-    # ---- docker 适配：得到待 pause 列表（强守卫已在本库内去掉本容器）----
+    # ---- docker 适配：算出要 pause 和要 stop/start 的容器（本容器已在上面两个函数里排除）----
     local need_docker=0
     PAUSE_LIST=""
+    STOP_LIST=""
     if docker_available; then
         PAUSE_LIST="$(get_pause_targets)"
+        STOP_LIST="$(get_stop_targets)"
         if [ -n "$PAUSE_LIST" ]; then
             log_info "[$JOBNAME] docker 适配：待 pause 容器 = $PAUSE_LIST"
             # 强自冻守卫（双保险）
@@ -77,6 +86,17 @@ run_one_job() {
             fi
             need_docker=1
         fi
+        if [ -n "$STOP_LIST" ]; then
+            log_info "[$JOBNAME] docker 适配：待 stop/start 容器 = $STOP_LIST"
+            # 防止把本容器也停掉（双保险）
+            if echo "$STOP_LIST" | grep -qx "$CONTAINER_NAME" \
+                || echo "$STOP_LIST" | grep -qx "$SELF_CONTAINER"; then
+                log_error "[$JOBNAME] 检测到 stop 列表包含本容器！已强制移除避免自停。"
+                STOP_LIST="$(echo "$STOP_LIST" | sed "s/\b${SELF_CONTAINER}\b//g; s/\b${CONTAINER_NAME}\b//g" | tr -s ' ')"
+            fi
+            need_docker=1
+        fi
+        coop_summary="pause(${PAUSE_LIST:-无}) stop(${STOP_LIST:-无})"
     else
         log_info "[$JOBNAME] docker 适配未启用或不可用，跳过容器协同"
     fi
@@ -88,23 +108,39 @@ run_one_job() {
     local tmp_out rc
 
     if [ "${REFLINK_ENABLE}" = "true" ]; then
-        log_info "[$JOBNAME] reflink 开启：先冻结容器做快照，再尽快解冻让其恢复服务"
-        # 冻结
+        log_info "[$JOBNAME] reflink 开启：先暂停/停止容器做快照，再马上恢复让其继续服务"
+        # pause + stop（stop 失败就中止，不继续做快照）
         [ "$need_docker" = "1" ] && docker_pause_all "$PAUSE_LIST"
-        # 快照（此期间容器冻结，业务相对静止；快照瞬间完成）
-        if ! STAGE="$(make_reflink_stage "$SRC" "$JOBNAME" "$rules")"; then
+        if [ -n "$STOP_LIST" ] && ! docker_stop_all "$STOP_LIST"; then
+            log_error "[$JOBNAME] stop 失败，中止任务（部分容器未能停机）"
             [ "$need_docker" = "1" ] && docker_unpause_all "$PAUSE_LIST"
-            # STAGE 为空则按错误处理（strict 不支持 reflink 时返回非 0）
-            log_error "[$JOBNAME] reflink 快照失败"
+            PAUSE_LIST=""; STOP_LIST=""
             return 1
         fi
-        # 立即解冻，恢复业务容器（长上传不占用冻结时间）
+        # 快照（此时容器暂停/停止，业务相对静止；快照很快完成）
+        if ! STAGE="$(make_reflink_stage "$SRC" "$JOBNAME" "$rules")"; then
+            # STAGE 为空则按错误处理（strict 不支持 reflink 时返回非 0）；先恢复已停/已冻容器
+            log_error "[$JOBNAME] reflink 快照失败"
+            [ -n "$STOP_LIST" ] && docker_start_all "$STOP_LIST"
+            [ "$need_docker" = "1" ] && docker_unpause_all "$PAUSE_LIST"
+            PAUSE_LIST=""; STOP_LIST=""
+            return 1
+        fi
+        # 马上恢复业务容器（长上传不占停/冻的时间）
+        [ -n "$STOP_LIST" ] && docker_start_all "$STOP_LIST"
         [ "$need_docker" = "1" ] && docker_unpause_all "$PAUSE_LIST"
-        PAUSE_LIST=""   # 已解冻，重置避免 trap 重复
+        PAUSE_LIST=""   # 已恢复，重置避免 trap 重复
+        STOP_LIST=""
         rclone_src="$STAGE"
     else
-        log_info "[$JOBNAME] reflink 关闭：冻结容器 → 全程上传 → 解冻"
+        log_info "[$JOBNAME] reflink 关闭：暂停/停止容器 → 全程上传 → 恢复"
         [ "$need_docker" = "1" ] && docker_pause_all "$PAUSE_LIST"
+        if [ -n "$STOP_LIST" ] && ! docker_stop_all "$STOP_LIST"; then
+            log_error "[$JOBNAME] stop 失败，中止任务（部分容器未能停机）"
+            [ "$need_docker" = "1" ] && docker_unpause_all "$PAUSE_LIST"
+            PAUSE_LIST=""; STOP_LIST=""
+            return 1
+        fi
         rclone_src="$SRC"
     fi
 
@@ -188,10 +224,11 @@ run_one_job() {
         RESULT=1
     fi
 
-    # reflink 关闭场景的解冻此时进行
-    if [ "${REFLINK_ENABLE}" != "true" ] && [ -n "$PAUSE_LIST" ]; then
-        docker_unpause_all "$PAUSE_LIST"
-        PAUSE_LIST=""
+    # reflink 关闭场景的恢复此时进行（start 被停容器 + 解冻）
+    if [ "${REFLINK_ENABLE}" != "true" ]; then
+        [ -n "$STOP_LIST" ] && docker_start_all "$STOP_LIST"
+        [ -n "$PAUSE_LIST" ] && docker_unpause_all "$PAUSE_LIST"
+        PAUSE_LIST=""; STOP_LIST=""
     fi
 
     # ---- 单任务 webhook（任务级配置）----
@@ -210,6 +247,7 @@ run_one_job() {
             msg="${job_icon} 【oh-my-rclone 任务报告】${JOBNAME} - ${job_status}\n"
             msg+="源: ${SRC}\n"
             msg+="目标: ${REMOTE}:${DEST}\n"
+            msg+="容器: ${coop_summary:-无}\n"
             msg+="上传数据: ${uploaded_bytes}\n"
             msg+="失败文件大小: ${fsize_bytes} B\n"
             msg+="开始: ${job_start_str}  结束: ${job_end_str}\n"
