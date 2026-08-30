@@ -27,6 +27,10 @@ ENV_MAP = {
     "DOCKER_ADAPT_ENABLE": ("docker_adapt", True, "false"),
     "DOCKER_MODE":       ("docker_mode", False, "whitelist"),
     "DOCKER_CONTAINERS": ("docker_containers", False, ""),
+    "DOCKER_STOP_CONTAINERS": ("docker_stop_containers", False, ""),
+    "DOCKER_STOP_TIMEOUT":    ("docker_stop_timeout", False, "30"),
+    "DOCKER_START_RETRY":     ("docker_start_retry", False, "5"),
+    "DOCKER_START_WAIT":      ("docker_start_wait", False, "2"),
     "WEBHOOK_ENABLE":    ("webhook", True, "false"),
     "WEBHOOK_SUCCESS_ONLY": ("webhook_success_only", True, "false"),
     "ASTROBOT_PUSH_URL": ("astrobot_push_url", False, ""),
@@ -41,6 +45,7 @@ ENV_MAP = {
 TOP_KEYS = {
     "remote_host", "remote_user", "remote_pass", "remote_port", "remote_key_file",
     "reflink", "reflink_strict", "docker_adapt", "docker_mode", "docker_containers",
+    "docker_stop_containers", "docker_stop_timeout", "docker_start_retry", "docker_start_wait",
     "webhook", "webhook_success_only", "astrobot_push_url", "astrobot_push_token",
     "astrobot_push_umo",
     "fail_list_max", "schedule", "exclude",
@@ -221,6 +226,11 @@ def emit_jobs(g, data, path):
         print(f"DOCKER_ADAPT_ENABLE='{g.get('docker_adapt','false')}'")
         print(f"DOCKER_MODE='{g.get('docker_mode','whitelist')}'")
         print(f"DOCKER_CONTAINERS='{g.get('docker_containers','')}'")
+        # stop/start 列表同样为全局配置（仅 .env / config.toml 顶部）
+        print(f"DOCKER_STOP_CONTAINERS='{g.get('docker_stop_containers','')}'")
+        print(f"DOCKER_STOP_TIMEOUT='{g.get('docker_stop_timeout','30')}'")
+        print(f"DOCKER_START_RETRY='{g.get('docker_start_retry','5')}'")
+        print(f"DOCKER_START_WAIT='{g.get('docker_start_wait','2')}'")
         # webhook（任务级）
         print(f"WEBHOOK_ENABLE='{m.get('webhook','false')}'")
         print(f"WEBHOOK_SUCCESS_ONLY='{m.get('webhook_success_only','false')}'")

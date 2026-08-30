@@ -67,6 +67,7 @@ run_one_jobblock() {
     local start_j end_j rc
     local jname b_src b_dest b_remote b_exclude
     local b_reflink b_dockeren b_dockermode b_dockercontainers
+    local b_stopcontainers b_stoptim b_startretry b_startwait
     local b_whenable b_whsuccess b_whurl b_whtoken b_whumo
 
     # 从块文本解析出各字段（值已由 python 单引号转义）
@@ -75,6 +76,8 @@ run_one_jobblock() {
     b_remote="${REMOTE:-default}"; b_exclude="${EXCLUDE:-}"
     b_reflink="${REFLINK_ENABLE:-true}"; b_dockeren="${DOCKER_ADAPT_ENABLE:-false}"
     b_dockermode="${DOCKER_MODE:-whitelist}"; b_dockercontainers="${DOCKER_CONTAINERS:-}"
+    b_stopcontainers="${DOCKER_STOP_CONTAINERS:-}"; b_stoptim="${DOCKER_STOP_TIMEOUT:-30}"
+    b_startretry="${DOCKER_START_RETRY:-5}"; b_startwait="${DOCKER_START_WAIT:-2}"
     b_whenable="${WEBHOOK_ENABLE:-false}"; b_whsuccess="${WEBHOOK_SUCCESS_ONLY:-false}"
     b_whurl="${ASTROBOT_PUSH_URL:-}"; b_whtoken="${ASTROBOT_PUSH_TOKEN:-}"
     b_whumo="${ASTROBOT_PUSH_UMO:-}"
@@ -87,6 +90,8 @@ run_one_jobblock() {
         SRC="$b_src" DEST="$b_dest" REMOTE="$b_remote" EXCLUDE="$b_exclude" \
         REFLINK_ENABLE="$b_reflink" \
         DOCKER_ADAPT_ENABLE="$b_dockeren" DOCKER_MODE="$b_dockermode" DOCKER_CONTAINERS="$b_dockercontainers" \
+        DOCKER_STOP_CONTAINERS="$b_stopcontainers" DOCKER_STOP_TIMEOUT="$b_stoptim" \
+        DOCKER_START_RETRY="$b_startretry" DOCKER_START_WAIT="$b_startwait" \
         WEBHOOK_ENABLE="$b_whenable" WEBHOOK_SUCCESS_ONLY="$b_whsuccess" \
         ASTROBOT_PUSH_URL="$b_whurl" ASTROBOT_PUSH_TOKEN="$b_whtoken" ASTROBOT_PUSH_UMO="$b_whumo" \
         FORCE_DRY_RUN="$FORCE_DRY_RUN" \

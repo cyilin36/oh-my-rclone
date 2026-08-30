@@ -17,6 +17,11 @@ OMR_TMP_ROOT="${OMR_TMP_ROOT:-/tmp/oh-my-rclone}"      # reflink 快照根目录
 : "${DOCKER_ADAPT_ENABLE:=false}"
 : "${DOCKER_MODE:=whitelist}"
 : "${DOCKER_CONTAINERS:=}"
+# stop/start：这些容器不做 pause，改为备份前 docker stop、备份后 docker start。
+: "${DOCKER_STOP_CONTAINERS:=}"     # 逗号分隔容器名；空=不启用
+: "${DOCKER_STOP_TIMEOUT:=30}"      # docker stop 等容器退出的秒数，超时会被强杀
+: "${DOCKER_START_RETRY:=5}"        # docker start 失败重试次数
+: "${DOCKER_START_WAIT:=2}"         # docker start 重试间隔（秒）
 : "${WEBHOOK_ENABLE:=false}"
 : "${WEBHOOK_SUCCESS_ONLY:=false}"
 : "${ASTROBOT_PUSH_URL:=}"
@@ -232,31 +237,27 @@ docker_available() {
     return 0
 }
 
-# 计算本次要 pause 的容器集合（命中规则且正在运行、且绝不包含本容器）。
-# 通过 curl 访问 docker.sock 的 API：GET /containers/json 拿到运行中的容器。
-get_pause_targets() {
+# 返回运行中容器名列表（空格分隔），来自 docker /containers/json（默认仅运行中）。
+running_containers() {
     [ -S "${DOCKER_API}" ] || { echo ""; return 1; }
-    local json containers
+    local json
     json="$(curl -s --unix-socket "${DOCKER_API}" "http://localhost/containers/json" 2>/dev/null)"
     [ -z "$json" ] && { echo ""; return 1; }
+    # api 返回数组：[{"Id":"...","Names":["/name"]}, ...]；用 grep/sed 提取 /name
+    echo "$json" | grep -o '"Names":\[[^]]*\]' | sed -E 's/.*\[([^]]*)\].*/\1/; s/"//g; s/,/\n/g' | sed 's#^/##'
+    return 0
+}
 
-    local record=1 names name
-    # DOCKER_CONTAINERS 逗号分隔记录表
-    while IFS= read -r name; do
-        [ -z "$name" ] && continue
-        case "$name" in \#*) continue ;; esac
-        [ "$record" = "1" ] || record=1
-        # 记录表
-    done <<< "${DOCKER_CONTAINERS//,/ }"
-
-    containers=""
-    # 用 python 解析（容器内无 python 则用 jq 不存在，改用 grep 方案）。
-    # 简化实现：用 shell 提取 name 列表。
-    # api 返回数组：[{"Id":"...","Names":["/name"]}, ...]
-    # 用 grep/sed 提取 /name
+# 计算本次要 pause 的容器集合（命中规则且正在运行、且绝不包含本容器、且不在 stop 列表中）。
+# 通过 curl 访问 docker.sock 的 API：GET /containers/json 拿到运行中的容器。
+# 注意：DOCKER_STOP_CONTAINERS 列出的容器不做 pause（改走 stop/start），此处一律剔除。
+get_pause_targets() {
+    [ -S "${DOCKER_API}" ] || { echo ""; return 1; }
     local list
-    list="$(echo "$json" | grep -o '"Names":\[[^]]*\]' | sed -E 's/.*\[([^]]*)\].*/\1/; s/"//g; s/,/\n/g' | sed 's#^/##')"
+    list="$(running_containers)" || { echo ""; return 1; }
+    [ -z "$list" ] && { echo ""; return 0; }
 
+    local containers="" n
     case "${DOCKER_MODE}" in
         whitelist)
             for n in $list; do
@@ -273,9 +274,27 @@ get_pause_targets() {
             done
             ;;
     esac
-    # 强守卫：无论如何去掉自己，杜绝自冻死循环
-    containers="$(echo "$containers" | tr ' ' '\n' | grep -vx "$CONTAINER_NAME" | grep -vx "$SELF_CONTAINER" | grep -vx '' | tr '\n' ' ')"
-    echo "$containers"
+    # 强守卫：去掉自己，并剔除 stop 列表容器（它们走 stop/start，不做 pause），杜绝自冻死循环
+    local filtered=""
+    for n in $containers; do
+        case " $n " in " $CONTAINER_NAME "|" $SELF_CONTAINER ") continue ;; esac
+        contains "$n" "${DOCKER_STOP_CONTAINERS}" || filtered="${filtered}${n} "
+    done
+    echo "$filtered"
+}
+
+# 计算本次要 stop/start 的容器集合：DOCKER_STOP_CONTAINERS ∩ 运行中，且绝不包含本容器。
+get_stop_targets() {
+    [ -S "${DOCKER_API}" ] || { echo ""; return 1; }
+    local list
+    list="$(running_containers)" || { echo ""; return 1; }
+    [ -z "$list" ] && { echo ""; return 0; }
+    local targets="" n
+    for n in $list; do
+        case " $n " in " $CONTAINER_NAME "|" $SELF_CONTAINER ") continue ;; esac
+        contains "$n" "${DOCKER_STOP_CONTAINERS}" && targets="${targets}${n} "
+    done
+    echo "$targets"
 }
 
 contains() {
@@ -311,6 +330,40 @@ docker_unpause_all() {
             i=$((i+1)); [ "$i" -lt "${UNPAUSE_RETRY}" ] && sleep "${UNPAUSE_WAIT}"
         done
         [ "$i" -ge "${UNPAUSE_RETRY}" ] && { log_error "unpause 失败: $c"; ret=1; }
+    done
+    return $ret
+}
+
+# 停止容器（docker stop，超时可配）。校验 HTTP 码：
+# 204=已停止、304=本来就停着(算成功)；其余算失败并记录。任一失败返回非 0。
+docker_stop_all() {
+    local list="$1" c code stop_err=0
+    for c in $list; do
+        code="$(curl -s -o /dev/null -w '%{http_code}' -X POST --unix-socket "${DOCKER_API}" \
+            "http://localhost/containers/${c}/stop?t=${DOCKER_STOP_TIMEOUT:-30}" 2>/dev/null)"
+        if [ "$code" = "204" ] || [ "$code" = "304" ]; then
+            log_info "已 stop 容器: $c (http=$code)"
+        else
+            log_warn "stop 失败: $c (http=${code:-无响应})"; stop_err=1
+        fi
+    done
+    return $stop_err
+}
+
+# start 列表容器：启动（带重试）。304=已在运行视为成功。返回非 0 表示最终仍有失败。
+docker_start_all() {
+    local list="$1" c ret=0 i code
+    for c in $list; do
+        i=0
+        while [ "$i" -lt "${DOCKER_START_RETRY:-5}" ]; do
+            code="$(curl -s -o /dev/null -w '%{http_code}' -X POST --unix-socket "${DOCKER_API}" \
+                "http://localhost/containers/${c}/start" 2>/dev/null)"
+            if [ "$code" = "204" ] || [ "$code" = "304" ]; then
+                log_info "已 start 容器: $c (http=$code)"; break
+            fi
+            i=$((i+1)); [ "$i" -lt "${DOCKER_START_RETRY:-5}" ] && sleep "${DOCKER_START_WAIT:-2}"
+        done
+        [ "$i" -ge "${DOCKER_START_RETRY:-5}" ] && { log_error "start 失败: $c (http=${code:-无响应})"; ret=1; }
     done
     return $ret
 }
